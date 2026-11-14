@@ -93,7 +93,9 @@
   async function refreshBoard() {
     if (!st.active || !st.station) { st.board = null; return; }
     const id = st.station;
-    const q = `station=${encodeURIComponent(id)}${st.dest ? `&to=${encodeURIComponent(st.dest)}` : ""}&limit=4`;
+    // "Trains on the board" in Settings, as on Metra (per line and direction here, 1-10).
+    const limit = Math.max(1, Math.min(10, host.boardCount()));
+    const q = `station=${encodeURIComponent(id)}${st.dest ? `&to=${encodeURIComponent(st.dest)}` : ""}&limit=${limit}`;
     try {
       const d = await host.api(`/api/cta/arrivals?${q}`);
       if (id === st.station) st.board = d;
@@ -115,9 +117,11 @@
     try { d = await host.api("/api/cta/trains"); } catch (e) { console.warn(e); return; }
     st.trains = d;
     const focus = host.mapView.lineFocus;
-    // Only trains going on to "Going to", when one is picked.
-    const reach = st.board && st.dest ? new Set(st.board.groups.map((g) => g.route_id)) : null;
-    const list = d.trains.filter((t) => !reach || reach.has(t.route_id)).map((t) => ({
+    // "Trains on the map" in Settings, as on Metra: with a Going to station, only the
+    // trains on their way from From to it (the ones on the board), unless "All trains".
+    const runs = st.board && st.dest && !host.mapTrainsAll()
+      ? new Set(st.board.groups.flatMap((g) => g.trains.map((x) => String(x.run)))) : null;
+    const list = d.trains.filter((t) => !runs || runs.has(String(t.run))).map((t) => ({
       ...t, system: "cta", id: tripId(t.run), trip_id: tripId(t.run), train: t.run,
       live: true, delay: t.delayed ? 360 : 0, next_stop: nameOf(t.next_station_id, t.next_station),
     }));
@@ -125,7 +129,7 @@
     const n = focus ? list.filter((t) => t.route_id === focus).length : list.length;
     const note = $("map-note");
     note.textContent = d.source === "live"
-      ? `${n} ${focus ? `${lineOf(focus).short_name} ` : ""}train${n === 1 ? "" : "s"} · live from CTA`
+      ? `${n} ${focus ? `${lineOf(focus).short_name} ` : ""}train${n === 1 ? "" : "s"} · live positions${d.as_of ? ` · ${host.fmtDateTime(d.as_of)}` : ""}`
       : "No live CTA trains (add CTA_TRAIN_TRACKER_KEY on the server)";
     note.hidden = false;
     $("map-data").textContent = "Data provided by CTA. Not affiliated with or endorsed by CTA.";
@@ -151,7 +155,7 @@
     const from = st.byId.get(st.station), to = st.byId.get(st.dest);
     $("board-title").innerHTML = from
       ? `${stationHtml(from)}${to ? ` <span class="arrow">→</span> ${stationHtml(to)}` : ""}`
-      : "Choose a CTA station";
+      : "Choose a station";
     $("board-swap").hidden = !(from && to);
     $("clear-btn").hidden = !(st.station || st.dest);
     const p = st.profile;
@@ -194,7 +198,7 @@
     const upd = $("board-updated");
     if (!st.station) {
       list.innerHTML = "";
-      host.showEmpty("Pick a CTA station (or tap one on the map).");
+      host.showEmpty("Search for a station above, tap one on the map, or use To home / To work.");
       upd.textContent = "";
       return;
     }
@@ -202,13 +206,18 @@
     host.showEmpty(d.groups.length ? "" : st.dest ? "No direct trains to that station soon." : "No trains in the next few hours.");
     upd.textContent = d.source === "live" ? `CTA · ${host.fmtTime(d.as_of)}` : "CTA schedule";
     const sel = host.selectedTrip();
-    list.innerHTML = d.groups.map((g) => {
+    if (st.dest) { renderTrips(d, now, sel); return; }
+    // Which way each card goes, at the right of its header, like Metra's; downtown (where
+    // that means nothing) the platform instead.
+    const DIR = { inbound: "Toward downtown", outbound: "Away from downtown" };
+    list.innerHTML = setupCard() + d.groups.map((g) => {
       const x = g.trains[0];
       const arrives = (t) => (t.arrives ? ` · arrives ${esc(host.fmtTime(t.arrives))}` : "");
-      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${tripId(t.run)}" data-route="${esc(g.route_id)}"` : ""}><b>${Math.max(0, Math.round((t.time - now) / 60))} min</b> · ${esc(host.fmtTime(t.time))}${g.destinations.length > 1 ? ` · ${esc(t.destination)}` : ""}</button>`).join("");
+      // "Then": time · destination, like Metra's.
+      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${tripId(t.run)}" data-route="${esc(g.route_id)}"` : ""}><b>${esc(host.fmtTime(t.time))}</b> · ${esc(t.destination || g.label)}</button>`).join("");
       const dest = g.destinations.length > 1 ? x.destination : g.label;
       return `<li class="lc cta-lc${sel && sel === tripId(x.run) ? " selected" : ""}" style="--line:${esc(g.color)}">
-        <div class="lc-top">${host.chip(g.route_short, g.color, g.text_color)}<span class="lc-name">${esc(g.route_name)}</span><span class="lc-dir">${esc(g.platform || "")}</span></div>
+        <div class="lc-top">${host.chip(g.route_short, g.color, g.text_color)}<span class="lc-name">${esc(g.route_name)}</span><span class="lc-dir">${esc(DIR[g.direction] || g.platform || "")}</span></div>
         <button type="button" class="lc-next"${x.run ? ` data-trip="${tripId(x.run)}" data-route="${esc(g.route_id)}"` : ""} title="Show this train on the map">
           <span class="lc-time">${host.bigTime(x.time)}</span>
           <span class="lc-main"><span class="lc-dest">${esc(dest)}</span>
@@ -217,6 +226,32 @@
         </button>
         ${later ? `<div class="lc-later"><span class="muted">Then</span>${later}</div>` : ""}
         ${historyHtml(g.history)}
+      </li>`;
+    }).join("");
+    const dl = $("data-line");
+    dl.hidden = false;
+    dl.textContent = d.source === "live" ? d.credit
+      : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
+  }
+
+  // With a Going to station: one row per trip, soonest first, like Metra's
+  // ("Arrives 12:34 PM · 28 min", line chip, status, run number).
+  function renderTrips(d, now, sel) {
+    const list = $("board-list");
+    const to = nameOf(st.dest);
+    const rows = d.groups.flatMap((g) => g.trains.map((t) => ({ ...t, g })))
+      .sort((a, b) => a.time - b.time).slice(0, Math.max(1, host.boardCount()));
+    list.innerHTML = setupCard() + rows.map((r) => {
+      const g = r.g, trip = r.run ? tripId(r.run) : null;
+      const ride = r.arrives ? Math.round((r.arrives - r.time) / 60) : null;
+      const status = r.delayed ? '<span class="badge cancel" title="CTA says this train is delayed">Delayed</span>'
+        : r.live ? '<span class="badge live">Live</span>' : '<span class="badge sched">Scheduled</span>';
+      const beyond = r.destination && r.destination !== to ? `<span class="beyond" title="Continues to ${esc(r.destination)}">→ ${esc(r.destination)}</span>` : "";
+      return `<li class="dep cta-dep${trip && sel === trip ? " selected" : ""}" style="--line:${esc(g.color)}"${trip ? ` data-trip="${trip}" data-route="${esc(g.route_id)}" tabindex="0" role="button" title="Show this train on the map"` : ""}>
+        <div class="timecol"><div class="time">${host.bigTime(r.time)}</div></div>
+        <div class="main"><div class="dest arr-head">${r.arrives ? `Arrives <b>${esc(host.fmtTime(r.arrives))}</b> <span class="trip">· ${ride} min</span>` : esc(r.destination || g.label)}</div>
+          <div class="meta">${host.chip(g.route_short, g.color, g.text_color)} ${status}${r.run ? ` <span class="muted">#${esc(r.run)}</span>` : ""}${beyond}</div></div>
+        <div class="mins">${untilHtml(r, now)}</div>
       </li>`;
     }).join("");
     const dl = $("data-line");
@@ -525,6 +560,23 @@
     } catch (e) { alert(`Couldn't save the CTA ${what}: ${e.message}`); }
     render(); syncPlaces();
   }
+  // The commute editor (Settings, or "Set up" on the board) saving CTA's commute: then open
+  // the board on the leg for right now, as the Metra side does.
+  async function saveCommute(values) {
+    await saveProfile(values, "commute");
+    const leg = st.profile.leg;
+    if (leg && st.byId.has(leg.from)) { st.station = leg.from; st.dest = leg.to || null; save(); }
+    st.board = null; st.timetable = null; render(); refreshAll();
+  }
+  // Stations for the commute editor's search: name, line chips.
+  function suggest(q) {
+    return matches(q).slice(0, 120).map((s) => ({ id: s.id, name: s.display, routes: s.routes,
+      chips: s.routes.map((r) => { const l = lineOf(r); return host.chip(l.short_name, l.color, l.text_color); }).join("") }));
+  }
+  const stationName = (id) => (st.byId.get(id) || {}).display || "";
+  // "Set up your commute" on the board when CTA has no home yet: the same card as Metra's.
+  const setupCard = () => host.setupCardHtml(!!(st.profile && st.profile.home_station));
+
   // Home / Work on the board: the commute that way, or set it from the current station.
   function goTrip(kind) {
     const p = st.profile;
@@ -615,6 +667,7 @@
     fromPick = pickerFor("cta-from", "cta-from-list", () => st.station, (id) => selectStation(id), false);
     toPick = pickerFor("cta-to", "cta-to-list", () => st.dest, (id) => selectDest(id), true);
     $("cta-swap").addEventListener("click", swap);
+    $("cta-hide-btn").addEventListener("click", () => host.hidePickers());
     $("cta-home-btn").addEventListener("click", () => {
       const p = st.profile;
       if (p.home_station) selectStation(p.home_station);
@@ -633,7 +686,7 @@
     $("board-list").addEventListener("click", (e) => {
       if (!st.active) return;
       const b = e.target.closest("[data-trip]");
-      if (b && b.closest(".cta-lc")) host.pickTrain(b.dataset.trip, b.dataset.route);
+      if (b && b.closest(".cta-lc, .cta-dep")) host.pickTrain(b.dataset.trip, b.dataset.route);
     });
     document.addEventListener("visibilitychange", () => { if (st.active && document.visibilityState === "visible") { refreshAll(); refreshAlerts(); } });
     document.body.classList.toggle("sys-cta", st.active);
@@ -651,7 +704,7 @@
     myLines: () => new Set([st.station, st.dest, st.profile.home_station, st.profile.work_station]
       .map((id) => st.byId.get(id)).filter(Boolean).flatMap((s) => s.routes)),
     selectStation, clear, swap, goTrip, popup, toTrip, tripPath,
-    renderTtHead, setTtLine,
+    renderTtHead, setTtLine, suggest, stationName, saveCommute,
     tabChanged: () => { st.board = null; st.timetable = null; render(); refreshAll(); },
   };
 })();

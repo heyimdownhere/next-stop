@@ -329,7 +329,7 @@
     if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
   }
   $("board-list").addEventListener("click", (e) => {
-    if (e.target.closest("a, button")) return;
+    if (CTA.active() || e.target.closest("a, button")) return;
     const li = e.target.closest(".dep[data-trip]");
     if (li) pickBoardTrain(li);
   });
@@ -439,12 +439,13 @@
     return direct.concat(other.length ? [{ header: `No direct train from ${from ? from.name : "here"}` }, ...other] : []);
   }
 
-  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches }) {
+  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches,
+                       nameOf = (id) => { const st = state.stationById.get(id); return st ? st.name : ""; } }) {
     const input = $(inputId);
     const list = $(listId);
     let matches = [];
     let active = -1;
-    const current = () => { const st = state.stationById.get(getValue()); return st ? st.name : ""; };
+    const current = () => nameOf(getValue()) || "";
 
     function open(isOpen) {
       if (isOpen) enter(list); else list.hidden = true;
@@ -461,7 +462,7 @@
           if (st.header) return `<li class="group" role="presentation">${esc(st.header)}</li>`;
           if (st.disabled) return `<li class="disabled" aria-disabled="true"><span>${esc(st.name)} <small class="muted">${esc(st.hint || "")}</small></span><span class="chips">${routeChips(st.routes)}</span></li>`;
           i += 1;
-          return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${routeChips(st.routes)}</span></li>`;
+          return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${st.chips != null ? st.chips : routeChips(st.routes)}</span></li>`;
         }).join("")
         : '<li class="empty">No matching stations</li>');
       open(true);
@@ -743,12 +744,16 @@
   const TIME_PRESETS = [["12:00", "Noon"], ["14:00", "2 PM"], ["15:00", "3 PM"], ["16:00", "4 PM"],
     ["17:00", "5 PM"], ["18:00", "6 PM"], ["19:00", "7 PM"]];
   const draft = { home: null, work: null };
+  // The commute editor edits the commute of the system you're on: Metra's, or CTA's.
+  let cmCta = false;
+  const cmSuggest = (q) => (cmCta ? CTA.suggest(q) : stationMatches(q));
+  const cmName = (id) => (cmCta ? CTA.stationName(id) : (state.stationById.get(id) || {}).name || "");
   const homePick = makePicker({
-    inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set",
+    inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set", suggest: cmSuggest, nameOf: cmName,
     getValue: () => draft.home, onSelect: (id) => { draft.home = id || null; syncDraft(); },
   });
   const workPick = makePicker({
-    inputId: "cm-work", listId: "cm-work-list", allowClear: true, clearLabel: "No work station",
+    inputId: "cm-work", listId: "cm-work-list", allowClear: true, clearLabel: "No work station", suggest: cmSuggest, nameOf: cmName,
     getValue: () => draft.work, onSelect: (id) => { draft.work = id || null; syncDraft(); },
   });
   $("cm-days").innerHTML = DAYS.map((d, i) =>
@@ -772,10 +777,11 @@
   }
 
   function openCommute() {
-    const p = state.home;
+    cmCta = CTA.active();
+    const p = cmCta ? CTA.profile() : state.home;
     draft.home = p.home_station || null;
     draft.work = p.work_station || null;
-    const src = (s, name) => s === "env" ? `from ${name}` : "";
+    const src = (s, name) => (!cmCta && s === "env" ? `from ${name}` : "");
     $("cm-home-src").textContent = src(p.source, "HOME_STATION");
     $("cm-work-src").textContent = src(p.work_source, "WORK_STATION");
     $("cm-time").value = p.switch_time || "12:00";
@@ -788,7 +794,7 @@
   $("commute-cancel").addEventListener("click", () => $("commute-dialog").close());
   $("commute-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const p = state.home;
+    const p = cmCta ? CTA.profile() : state.home;
     if (draft.home && draft.work && draft.home === draft.work) { alert("Home and work need to be different stations."); return; }
     if (draft.work && !draft.home) { alert("Pick a home station too, so the app knows where to take you after work."); return; }
     const days = [...document.querySelectorAll("#cm-days input:checked")].map((cb) => Number(cb.value));
@@ -798,16 +804,28 @@
     if (draft.home !== (p.home_station || null)) { values.home_station = draft.home; values.home_dest = null; }
     if (draft.work !== (p.work_station || null)) values.work_station = draft.work;
     $("commute-dialog").close();
+    if (cmCta) { await CTA.saveCommute(values); fillSettings(); return; }
     await saveProfile(values, "commute");
     goToLeg();
   });
 
   // First run: nothing configured anywhere -> invite the user to set it up.
-  function setupCardHtml() {
-    if (state.home.home_station) return "";
-    return `<li class="setup-card"><div><b>Set up your commute</b><br><span class="muted small">Pick your home (and work) station so the app opens on the right trains.</span></div><button type="button" class="primary" id="setup-commute">Set up</button></li>`;
+  // ✕ closes it for good on this device (per system); Settings → Edit commute still sets it up.
+  const SETUP_CLOSED = (sys) => `next.setup.closed.${sys}`;
+  const setupClosed = (sys) => localStorage.getItem(SETUP_CLOSED(sys)) === "1";
+  function setupCardHtml(sys = "metra", hasHome = !!state.home.home_station) {
+    if (hasHome || setupClosed(sys)) return "";
+    return `<li class="setup-card" data-sys="${sys}"><div><b>Set up your commute</b><br><span class="muted small">Pick your home (and work) station so the app opens on the right trains.</span></div><button type="button" class="primary" id="setup-commute">Set up</button><button type="button" class="setup-x" aria-label="Close" title="Close (set it up later in Settings)">✕</button></li>`;
   }
-  document.addEventListener("click", (e) => { if (e.target.id === "setup-commute") openCommute(); });
+  document.addEventListener("click", (e) => {
+    if (e.target.id === "setup-commute") openCommute();
+    const x = e.target.closest(".setup-x");
+    if (x) {
+      const card = x.closest(".setup-card");
+      localStorage.setItem(SETUP_CLOSED(card.dataset.sys || "metra"), "1");
+      card.remove();
+    }
+  });
 
   // ---------- departure board ----------
   // Which list the board shows: to a destination, one line in one direction, or line cards.
@@ -1192,8 +1210,10 @@
       groups.get(key).push(r);
     }
     const dirLabel = { inbound: "Toward downtown", outbound: "Away from downtown" };
-    const pickAttrs = (r) => (r.route_id
-      ? ` data-pick="${esc(r.trip_id || "")}" data-route="${esc(r.route_id || "")}" data-dir="${esc(r.direction || "")}" title="All ${esc(r.route_short)} trains this way"` : "");
+    // Tap: show the train on the map (tap again to let go); double-tap: its stops. As on CTA.
+    const pickAttrs = (r) => (r.trip_id
+      ? ` data-trip="${esc(r.trip_id)}" data-route="${esc(r.route_id || "")}" title="Show this train on the map"` : "");
+    const selTrip = state.selectedTrip;
     const html = [...groups.values()].map((rs) => {
       const r = rs[0];
       const changed = r.scheduled && fmtTime(r.scheduled) !== fmtTime(r.time);
@@ -1205,9 +1225,9 @@
         (r.live || r.tracking) && !r.cancelled ? delayHtml(r.delay, r.tracking) : ""].filter(Boolean).join(" ");
       const later = rs.slice(1, 4).map((x) => {
         const late = (x.live || x.tracking) && x.delay >= 60 ? (x.delay >= 360 ? " late" : " minor") : "";
-        return `<button type="button" class="lc-pill${x.cancelled ? " cancelled" : ""}${late}"${pickAttrs(x)}><b>${esc(fmtTime(x.time))}</b> · ${esc(x.destination || "")}</button>`;
+        return `<button type="button" class="lc-pill${x.cancelled ? " cancelled" : ""}${late}${selTrip && selTrip === x.trip_id ? " selected" : ""}"${pickAttrs(x)}><b>${esc(fmtTime(x.time))}</b> · ${esc(x.destination || "")}</button>`;
       }).join("");
-      return `<li class="lc${r.cancelled ? " cancelled" : ""}" style="--line:${esc(r.color)}">
+      return `<li class="lc${r.cancelled ? " cancelled" : ""}${selTrip && selTrip === r.trip_id ? " selected" : ""}" style="--line:${esc(r.color)}">
         <div class="lc-top">${chip(r.route_short, r.color, r.text_color)}<span class="lc-name">${esc(r.route_name)}</span><span class="lc-dir">${dirLabel[r.direction] || ""}</span></div>
         <button type="button" class="lc-next"${pickAttrs(r)}>
           <span class="lc-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
@@ -1222,18 +1242,23 @@
     mapView.refreshPopups();
   }
   $("board-list").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-pick]");
-    if (!b || !b.dataset.route) return;
-    e.stopPropagation();
-    // Show every train on this line in this direction, with the tapped train highlighted (and on the map).
-    state.selectedTrip = b.dataset.pick || null;
-    state.line = { route: b.dataset.route, direction: b.dataset.dir || null };
-    state.departures = null;
-    updateClear();
-    refreshDepartures();
-    if (state.selectedTrip && !mapHidden()) mapView.selectTrip(state.selectedTrip, b.dataset.route);
-    window.scrollTo({ top: $("board-title").getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
-  }, true);
+    if (CTA.active()) return;
+    const b = e.target.closest(".lc [data-trip]");
+    if (b) pickTrain(b.dataset.trip, b.dataset.route);
+  });
+  // One tap on a train on the board (Metra or CTA): show it on the map; again to let go.
+  function pickTrain(trip, route) {
+    if (mapHidden()) return;
+    if (state.selectedTrip === trip) { state.selectedTrip = null; mapView.clearSelection(false); renderBoard(); return; }
+    state.selectedTrip = trip;
+    if (!mapView.selectTrip(trip, route)) {
+      const note = $("map-note");
+      note.textContent = "That train isn't running yet; its line is highlighted";
+      note.hidden = false;
+    }
+    renderBoard();
+    if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
+  }
 
   // ---------- train detail sheet (double-tap any train) ----------
   // Opens half-height: a summary and the timeline around the train; drag up for every stop.
@@ -1421,7 +1446,9 @@
     document.addEventListener("pointerup", (e) => {
       const trip = tripOf(e.target);
       if (!trip) { last.trip = null; return; }
-      const t = performance.now();
+      // When the finger lifted, not when this runs: the first tap's work (map pop-up,
+      // flying the map, redrawing) can hold the second tap's event back on a slow phone.
+      const t = e.timeStamp || performance.now();
       if (last.trip === trip && t - last.t < 400 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
         last.trip = null;
         swallowUntil = t + 450;  // the click (if any) that follows only opens the sheet
@@ -1435,13 +1462,13 @@
     for (const type of ["touchstart", "touchend", "dblclick"]) {
       document.addEventListener(type, (e) => {
         const onTrain = e.target.closest && e.target.closest(".train-marker");
-        if (onTrain && last.trip && performance.now() - last.t < 400) e.stopPropagation();
+        if (onTrain && last.trip && (e.timeStamp || performance.now()) - last.t < 400) e.stopPropagation();
         if (type === "dblclick" && tripOf(e.target)) { e.stopPropagation(); e.preventDefault(); }
       }, { capture: true, passive: type !== "dblclick" });
     }
     document.addEventListener("click", (e) => {
       // The rest of the double-tap (it can land on the sheet that just opened under the finger).
-      if (performance.now() < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
+      if ((e.timeStamp || performance.now()) < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
     }, true);
   })();
 
@@ -1552,7 +1579,6 @@
       if (state.tab === "timetable") { CTA.renderTtHead(); $("tt-head").hidden = false; } else $("tt-head").hidden = true;
       $("map-clear").hidden = true;
       document.body.classList.remove("tt-line-mode");
-      btn.hidden = false;
       CTA.render();
     }
     renderAlerts();
@@ -1567,7 +1593,7 @@
   $("change-btn").addEventListener("click", () => {
     pickersOpen = !pickersOpen;
     applyView();
-    if (pickersOpen) $("station-input").focus();
+    if (pickersOpen) $(CTA.active() ? "cta-from" : "station-input").focus();
   });
 
   // ---------- settings page (#settings, so the phone's back button closes it) ----------
@@ -1602,8 +1628,10 @@
   $("settings-commute-edit").addEventListener("click", () => openCommute());
 
   function fillSettings() {
-    const p = state.home || {};
-    const name = (id) => (id && state.stationById.get(id) ? state.stationById.get(id).name : null);
+    const cta = CTA.active();
+    const p = (cta ? CTA.profile() : state.home) || {};
+    const name = (id) => (!id ? null : cta ? CTA.stationName(id) || null : state.stationById.get(id) ? state.stationById.get(id).name : null);
+    $("settings-commute-title").textContent = cta ? "Your CTA commute" : "Your Metra commute";
     const DAYN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const days = (p.work_days || []).map((d) => DAYN[d]).join(", ");
     const clock = (hhmm) => {
@@ -1975,19 +2003,15 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
+    boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),
+    hidePickers: () => $("hide-pickers-btn").click(),
+    setupCardHtml: (hasHome) => setupCardHtml("cta", hasHome), mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,
     setAlerts: (list) => { state.alerts = list; renderAlerts(); },
-    pickTrain: (trip, route) => {
-      if (mapHidden()) return;
-      if (state.selectedTrip === trip) { state.selectedTrip = null; mapView.clearSelection(false); CTA.render(); return; }
-      state.selectedTrip = trip;
-      mapView.selectTrip(trip, route);
-      CTA.render();
-      if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
-    },
+    pickTrain: (trip, route) => pickTrain(trip, route),
     // Back to Metra: its lines, stations, trains and board again.
     onMetra: () => {
       state.selectedTrip = null;
