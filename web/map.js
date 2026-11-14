@@ -588,7 +588,9 @@
         seen.add(t.id);
         let m = trainMarkers.get(t.id);
         if (!m) {
-          const popup = new maplibregl.Popup({ offset: 14, maxWidth: "280px" }).setHTML(popupHtml(t));
+          // focusAfterOpen: false: opening it (a tap on the board selects the train) must not
+          // move focus, or the browser jumps the page to the map and a double-tap misses.
+          const popup = new maplibregl.Popup({ offset: 14, maxWidth: "280px", focusAfterOpen: false }).setHTML(popupHtml(t));
           const el = trainEl(t);
           const id = t.id;
           el.addEventListener("click", () => {

@@ -1421,7 +1421,9 @@
     document.addEventListener("pointerup", (e) => {
       const trip = tripOf(e.target);
       if (!trip) { last.trip = null; return; }
-      const t = performance.now();
+      // When the finger lifted, not when this runs: the first tap's work (map pop-up,
+      // flying the map, redrawing) can hold the second tap's event back on a slow phone.
+      const t = e.timeStamp || performance.now();
       if (last.trip === trip && t - last.t < 400 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
         last.trip = null;
         swallowUntil = t + 450;  // the click (if any) that follows only opens the sheet
@@ -1435,13 +1437,13 @@
     for (const type of ["touchstart", "touchend", "dblclick"]) {
       document.addEventListener(type, (e) => {
         const onTrain = e.target.closest && e.target.closest(".train-marker");
-        if (onTrain && last.trip && performance.now() - last.t < 400) e.stopPropagation();
+        if (onTrain && last.trip && (e.timeStamp || performance.now()) - last.t < 400) e.stopPropagation();
         if (type === "dblclick" && tripOf(e.target)) { e.stopPropagation(); e.preventDefault(); }
       }, { capture: true, passive: type !== "dblclick" });
     }
     document.addEventListener("click", (e) => {
       // The rest of the double-tap (it can land on the sheet that just opened under the finger).
-      if (performance.now() < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
+      if ((e.timeStamp || performance.now()) < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
     }, true);
   })();
 
