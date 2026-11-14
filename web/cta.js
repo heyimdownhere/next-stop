@@ -705,6 +705,8 @@
       .map((id) => st.byId.get(id)).filter(Boolean).flatMap((s) => s.routes)),
     selectStation, clear, swap, goTrip, popup, toTrip, tripPath,
     renderTtHead, setTtLine, suggest, stationName, saveCommute,
-    tabChanged: () => { st.board = null; st.timetable = null; render(); refreshAll(); },
+    // Keep the last board and timetable (both are cleared when the station changes),
+    // so the new tab draws at once instead of flashing empty while it refreshes.
+    tabChanged: () => { render(); refreshAll(); },
   };
 })();
