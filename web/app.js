@@ -439,12 +439,13 @@
     return direct.concat(other.length ? [{ header: `No direct train from ${from ? from.name : "here"}` }, ...other] : []);
   }
 
-  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches }) {
+  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches,
+                       nameOf = (id) => { const st = state.stationById.get(id); return st ? st.name : ""; } }) {
     const input = $(inputId);
     const list = $(listId);
     let matches = [];
     let active = -1;
-    const current = () => { const st = state.stationById.get(getValue()); return st ? st.name : ""; };
+    const current = () => nameOf(getValue()) || "";
 
     function open(isOpen) {
       if (isOpen) enter(list); else list.hidden = true;
@@ -461,7 +462,7 @@
           if (st.header) return `<li class="group" role="presentation">${esc(st.header)}</li>`;
           if (st.disabled) return `<li class="disabled" aria-disabled="true"><span>${esc(st.name)} <small class="muted">${esc(st.hint || "")}</small></span><span class="chips">${routeChips(st.routes)}</span></li>`;
           i += 1;
-          return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${routeChips(st.routes)}</span></li>`;
+          return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${st.chips != null ? st.chips : routeChips(st.routes)}</span></li>`;
         }).join("")
         : '<li class="empty">No matching stations</li>');
       open(true);
@@ -743,12 +744,16 @@
   const TIME_PRESETS = [["12:00", "Noon"], ["14:00", "2 PM"], ["15:00", "3 PM"], ["16:00", "4 PM"],
     ["17:00", "5 PM"], ["18:00", "6 PM"], ["19:00", "7 PM"]];
   const draft = { home: null, work: null };
+  // The commute editor edits the commute of the system you're on: Metra's, or CTA's.
+  let cmCta = false;
+  const cmSuggest = (q) => (cmCta ? CTA.suggest(q) : stationMatches(q));
+  const cmName = (id) => (cmCta ? CTA.stationName(id) : (state.stationById.get(id) || {}).name || "");
   const homePick = makePicker({
-    inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set",
+    inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set", suggest: cmSuggest, nameOf: cmName,
     getValue: () => draft.home, onSelect: (id) => { draft.home = id || null; syncDraft(); },
   });
   const workPick = makePicker({
-    inputId: "cm-work", listId: "cm-work-list", allowClear: true, clearLabel: "No work station",
+    inputId: "cm-work", listId: "cm-work-list", allowClear: true, clearLabel: "No work station", suggest: cmSuggest, nameOf: cmName,
     getValue: () => draft.work, onSelect: (id) => { draft.work = id || null; syncDraft(); },
   });
   $("cm-days").innerHTML = DAYS.map((d, i) =>
@@ -772,10 +777,11 @@
   }
 
   function openCommute() {
-    const p = state.home;
+    cmCta = CTA.active();
+    const p = cmCta ? CTA.profile() : state.home;
     draft.home = p.home_station || null;
     draft.work = p.work_station || null;
-    const src = (s, name) => s === "env" ? `from ${name}` : "";
+    const src = (s, name) => (!cmCta && s === "env" ? `from ${name}` : "");
     $("cm-home-src").textContent = src(p.source, "HOME_STATION");
     $("cm-work-src").textContent = src(p.work_source, "WORK_STATION");
     $("cm-time").value = p.switch_time || "12:00";
@@ -788,7 +794,7 @@
   $("commute-cancel").addEventListener("click", () => $("commute-dialog").close());
   $("commute-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const p = state.home;
+    const p = cmCta ? CTA.profile() : state.home;
     if (draft.home && draft.work && draft.home === draft.work) { alert("Home and work need to be different stations."); return; }
     if (draft.work && !draft.home) { alert("Pick a home station too, so the app knows where to take you after work."); return; }
     const days = [...document.querySelectorAll("#cm-days input:checked")].map((cb) => Number(cb.value));
@@ -798,6 +804,7 @@
     if (draft.home !== (p.home_station || null)) { values.home_station = draft.home; values.home_dest = null; }
     if (draft.work !== (p.work_station || null)) values.work_station = draft.work;
     $("commute-dialog").close();
+    if (cmCta) { await CTA.saveCommute(values); fillSettings(); return; }
     await saveProfile(values, "commute");
     goToLeg();
   });
@@ -1554,7 +1561,6 @@
       if (state.tab === "timetable") { CTA.renderTtHead(); $("tt-head").hidden = false; } else $("tt-head").hidden = true;
       $("map-clear").hidden = true;
       document.body.classList.remove("tt-line-mode");
-      btn.hidden = false;
       CTA.render();
     }
     renderAlerts();
@@ -1569,7 +1575,7 @@
   $("change-btn").addEventListener("click", () => {
     pickersOpen = !pickersOpen;
     applyView();
-    if (pickersOpen) $("station-input").focus();
+    if (pickersOpen) $(CTA.active() ? "cta-from" : "station-input").focus();
   });
 
   // ---------- settings page (#settings, so the phone's back button closes it) ----------
@@ -1604,8 +1610,10 @@
   $("settings-commute-edit").addEventListener("click", () => openCommute());
 
   function fillSettings() {
-    const p = state.home || {};
-    const name = (id) => (id && state.stationById.get(id) ? state.stationById.get(id).name : null);
+    const cta = CTA.active();
+    const p = (cta ? CTA.profile() : state.home) || {};
+    const name = (id) => (!id ? null : cta ? CTA.stationName(id) || null : state.stationById.get(id) ? state.stationById.get(id).name : null);
+    $("settings-commute-title").textContent = cta ? "Your CTA commute" : "Your Metra commute";
     const DAYN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const days = (p.work_days || []).map((d) => DAYN[d]).join(", ");
     const clock = (hhmm) => {
@@ -1977,7 +1985,9 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
+    boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),
+    hidePickers: () => $("hide-pickers-btn").click(), mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,

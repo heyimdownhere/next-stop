@@ -938,6 +938,8 @@ body.sheet-open { overflow: hidden; }
 .home-btn[disabled] { opacity: .45; cursor: default; }
 /* Next trains: the From row doesn't repeat Home/Work (the board has To home / To work). */
 body:not(.tt-station-mode) #home-btn, body:not(.tt-station-mode) #work-btn { display: none; }
+/* CTA's From row like Metra's: Hide on Next trains, Set as home / work on the timetable. */
+body:not(.tt-station-mode) #cta-home-btn, body:not(.tt-station-mode) #cta-work-btn { display: none; }
 .dep .meta .beyond { color: var(--muted); white-space: nowrap; }
 .dep .meta:has(.beyond) { flex-wrap: nowrap; }
 .dep .meta:has(.beyond) > * { flex-shrink: 0; }

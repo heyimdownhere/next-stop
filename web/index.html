@@ -122,6 +122,10 @@
           <div class="picker-label-row">
             <label for="cta-from" class="picker-label">From</label>
             <div class="pick-actions">
+              <button id="cta-hide-btn" class="home-btn hide-pickers" type="button" title="Hide the station boxes (Change brings them back)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5-5 5 5H7Z"/></svg>
+                <span>Hide</span>
+              </button>
               <button id="cta-home-btn" class="home-btn" type="button">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
                 <span id="cta-home-btn-text">Set as home</span>
@@ -134,7 +138,7 @@
           </div>
           <div class="picker-box">
             <input id="cta-from" type="search" autocomplete="off" spellcheck="false"
-                   placeholder="CTA station or line (e.g. Clark/Lake, Brown)…" role="combobox" aria-expanded="false"
+                   placeholder="Station or line (e.g. Belmont, Red)…" role="combobox" aria-expanded="false"
                    aria-controls="cta-from-list" aria-autocomplete="list">
             <span class="cta-dots in-input" id="cta-from-dots" aria-hidden="true"></span>
             <ul id="cta-from-list" class="station-list" role="listbox" hidden></ul>
@@ -281,7 +285,7 @@
     </div>
 
     <section class="settings-card">
-      <div class="card-head"><h3>Your commute</h3><span class="muted small">All devices</span></div>
+      <div class="card-head"><h3 id="settings-commute-title">Your commute</h3><span class="muted small">All devices</span></div>
       <dl id="settings-commute" class="kv"></dl>
       <button type="button" id="settings-commute-edit" class="secondary-btn">Edit commute</button>
     </section>
