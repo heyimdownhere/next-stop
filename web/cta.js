@@ -102,9 +102,10 @@
   async function refreshTimetable() {
     if (st.active && st.ttLine) return refreshLine();
     if (!st.active || !st.station) { st.timetable = null; return; }
-    const id = st.station, q = `station=${encodeURIComponent(id)}${st.dest ? `&to=${encodeURIComponent(st.dest)}` : ""}`;
+    // Like Metra's timetable: every train from the station; "Going to" is for Next trains.
+    const id = st.station;
     try {
-      const d = await host.api(`/api/cta/timetable?${q}`);
+      const d = await host.api(`/api/cta/timetable?station=${encodeURIComponent(id)}`);
       if (id === st.station) st.timetable = d;
     } catch (e) { console.warn(e); }
   }
@@ -227,11 +228,13 @@
   // Timetable tab: every train still to come today, laid out like Metra's (direction
   // switch, one row per train). The next few trains of each line have live times.
   st.ttDir = null;
+  // Same rule as Metra's timetable: toward downtown before the commute switch time
+  // (noon unless set), away from downtown after.
   function defaultDir() {
-    const p = st.profile || {};
-    const hm = new Date(host.serverNow() * 1000).toTimeString().slice(0, 5);
-    if (st.station && st.station === p.work_station) return "outbound";
-    return hm < (p.switch_time || "12:00") ? "inbound" : "outbound";
+    const sw = (st.profile && st.profile.switch_time) || "12:00";
+    const hm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Chicago" })
+      .format(new Date(host.serverNow() * 1000));
+    return hm < sw ? "inbound" : "outbound";
   }
   // The line chips above the timetable, like Metra's: "Station" (that station's trains)
   // or a line (its own page: trains on the way now, then still to start today).
@@ -373,7 +376,7 @@
     }
     if (!rows.length) {
       const where = split ? ` ${dir === "inbound" ? "toward" : "away from"} downtown` : "";
-      html.push(`<p class="muted tt-none">No more trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
+      html.push(`<p class="muted tt-none">No more trains${where} from ${esc(from)} today.</p>`);
     } else {
       const sel = host.selectedTrip();
       const next = rows[0];
@@ -384,8 +387,7 @@
         // train is tracked live or flagged as delayed.
         const status = r.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
           : r.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : "";
-        const end = st.dest ? r.arrival : r.final_arrival;
-        const arr = end ? `arrives ${esc(host.fmtTime(end))}` : "";
+        const arr = r.final_arrival ? `arrives <b>${esc(host.fmtTime(r.final_arrival))}</b>` : "";
         const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"` : "";
         html.push(`<li class="lt-row${r === next ? " next" : ""}${r.run && sel === tripId(r.run) ? " selected" : ""}"${trip}>
           <span class="lt-time">${host.bigTime(r.time)}</span>
