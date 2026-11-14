@@ -100,6 +100,7 @@
     } catch (e) { console.warn(e); }
   }
   async function refreshTimetable() {
+    if (st.active && st.ttLine) return refreshLine();
     if (!st.active || !st.station) { st.timetable = null; return; }
     const id = st.station, q = `station=${encodeURIComponent(id)}${st.dest ? `&to=${encodeURIComponent(st.dest)}` : ""}`;
     try {
@@ -232,24 +233,110 @@
     if (st.station && st.station === p.work_station) return "outbound";
     return hm < (p.switch_time || "12:00") ? "inbound" : "outbound";
   }
-  // The line chips above the timetable, like Metra's: "Station" (every line here) or one line.
+  // The line chips above the timetable, like Metra's: "Station" (that station's trains)
+  // or a line (its own page: trains on the way now, then still to start today).
   st.ttLine = null;
+  st.lineDir = null;
+  st.lineData = null;
   function renderTtHead() {
-    const lines = (st.byId.get(st.station) || {}).routes || [];
-    if (st.ttLine && !lines.includes(st.ttLine)) st.ttLine = null;
     const chip = (id, label, color) => `<button type="button" class="line-chip${st.ttLine === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${st.ttLine === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
     $("tt-line-pin").innerHTML = chip(null, "📍 Station", null);
-    $("tt-line-chips").innerHTML = lines.map((rid) => { const l = lineOf(rid); return chip(rid, l.short_name, l.color); }).join("");
+    $("tt-line-chips").innerHTML = st.lines.map((l) => chip(l.id, l.short_name, l.color)).join("");
+    const on = $("tt-line-chips").querySelector(".line-chip.on");
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   function setTtLine(rid) {
+    if ((rid || null) === st.ttLine) return;
     st.ttLine = rid || null;
+    st.lineData = null;
     renderTtHead();
-    renderTimetable();
+    render();
+    if (st.ttLine) refreshLine().then(render);
+  }
+  // In a line's page the station boxes and board title go away, as on Metra.
+  function syncLineMode() {
+    document.body.classList.toggle("cta-line-mode", !!(st.active && st.ttLine && host.tab() === "timetable"));
+  }
+  async function refreshLine() {
+    const rid = st.ttLine;
+    if (!rid) return;
+    const dir = st.lineDir ? `&direction=${encodeURIComponent(st.lineDir)}` : "";
+    try {
+      const d = await host.api(`/api/cta/line?route=${encodeURIComponent(rid)}${dir}`);
+      if (rid === st.ttLine) { st.lineData = d; st.lineDir = d.direction; }
+    } catch (e) { console.warn(e); }
+  }
+  // Like Metra's "How far along" bar: time since the train started over its whole run.
+  function renderLine() {
+    const tt = $("tt"), d = st.lineData, now = host.serverNow();
+    const l = lineOf(st.ttLine);
+    renderTtHead();
+    $("board-updated").textContent = d && d.source === "live" ? `CTA ${host.fmtDateTime(d.as_of)}` : "CTA schedule";
+    if (!d) { tt.innerHTML = ""; host.showEmpty("Loading…"); return; }
+    host.showEmpty("");
+    const running = d.trains.filter((t) => t.running);
+    const later = d.trains.filter((t) => !t.running);
+    const counts = [running.length ? `${running.length} on the way` : "", later.length ? `${later.length} more today` : ""]
+      .filter(Boolean).join(" · ") || "No more trains today";
+    const html = [`<div class="lt-hero" style="--line:${esc(l.color)}">
+        <div class="lt-name">${host.chip(l.short_name, l.color, l.text_color)}<b>${esc(d.route_name || l.name || "")}</b></div>
+        <div class="lt-sub">${esc(counts)}${d.as_of ? ` · <span title="When CTA last updated this data">CTA data ${esc(host.fmtDateTime(d.as_of))}</span>` : ""}</div>
+      </div>
+      <div class="lt-dir" role="group" aria-label="Direction">${d.directions.map((x) =>
+        `<button type="button" data-cta-ldir="${esc(x.id)}" aria-pressed="${x.id === d.direction}">${esc(x.label)}</button>`).join("")}</div>`];
+    const label = (d.directions.find((x) => x.id === d.direction) || {}).label || "";
+    if (!d.trains.length) {
+      html.push(`<p class="muted tt-none">No more ${esc(l.short_name)} Line trains ${esc(label.toLowerCase())} today.</p>`);
+      tt.innerHTML = html.join("");
+      return;
+    }
+    // CTA doesn't say how late a train is: Live (green) or Delayed (red), where Metra says "3 min late".
+    const status = (t) => (t.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
+      : t.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : '<span class="tt-sched">Scheduled</span>');
+    const sel = host.selectedTrip();
+    if (running.length) {
+      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3><div class="lt-cards">');
+      for (const t of running) {
+        const span = Math.max(60, t.dest_time - t.origin_time);
+        const pct = Math.max(3, Math.min(97, ((now - t.origin_time) / span) * 100));
+        html.push(`<div class="lt-card${sel === t.trip_id ? " selected" : ""}" data-trip="${esc(t.trip_id)}" data-route="${esc(st.ttLine)}">
+          <div class="lt-card-top"><b>#${esc(t.train)} to ${esc(t.destination || "")}</b>${status(t)}</div>
+          <div class="lt-bar ${t.delayed ? "late" : "ontime"}"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <div class="lt-card-foot">
+            <span class="muted">${esc(t.origin === "Loop" ? "Loop" : nameOf(t.origin_id, t.origin))} ${esc(host.fmtTime(t.origin_time))}</span>
+            ${t.next_stop ? `<span class="lt-next"><span class="muted">Next</span> <b>${esc(nameOf(t.next_id, t.next_stop))}</b></span>` : ""}
+            <b class="lt-arr" title="Arrives ${esc(t.destination || "")}">${esc(host.fmtTime(t.dest_time))}</b>
+          </div>
+        </div>`);
+      }
+      html.push("</div>");
+    }
+    if (later.length) {
+      html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
+      for (const t of later) {
+        const m = Math.round((t.origin_time - now) / 60);
+        const from = t.origin === "Loop" ? "Loop" : nameOf(t.origin_id, t.origin);
+        html.push(`<li class="lt-row">
+          <span class="lt-time">${host.bigTime(t.origin_time)}</span>
+          <span class="lt-main"><span>${esc(t.destination || "")} <span class="muted small">from ${esc(from)}</span></span>
+            <span class="muted small">${t.dest_time ? `arrives <b>${esc(host.fmtTime(t.dest_time))}</b>` : ""}</span></span>
+          <span class="lt-in">${m > 0 ? host.untilText(m) : ""}</span>
+        </li>`);
+      }
+      html.push("</ol>");
+    }
+    tt.innerHTML = html.join("");
+    const dl = $("data-line");
+    dl.hidden = false;
+    dl.textContent = d.source === "live" ? d.credit
+      : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
   }
   function renderTimetable() {
     if (!st.active) return;
     updatePill();
     renderTitle();
+    syncLineMode();
+    if (st.ttLine) return renderLine();
     const tt = $("tt"), d = st.timetable;
     const now = host.serverNow();
     $("board-updated").textContent = d && d.source === "live" ? `CTA · ${host.fmtTime(d.as_of)}` : "CTA schedule";
@@ -261,9 +348,9 @@
     // Downtown (in the Loop) "toward downtown" means nothing: one list.
     const split = !d.downtown && d.departures.some((r) => r.direction);
     const dir = split ? (st.ttDir || (st.ttDir = defaultDir())) : null;
-    const rows = d.departures.filter((r) => (!split || r.direction === dir) && (!st.ttLine || r.route_id === st.ttLine));
+    const rows = d.departures.filter((r) => !split || r.direction === dir);
     // The station's lines (as Metra's summary shows them): chips when there are one or two.
-    const here = st.ttLine ? [st.ttLine] : ((st.byId.get(st.station) || {}).routes || []);
+    const here = (st.byId.get(st.station) || {}).routes || [];
     const lines = here.map(lineOf);
     const many = new Set(rows.map((r) => r.route_id)).size > 1;
     const color = (lines[0] && lines[0].color) || "var(--accent)";
@@ -280,8 +367,7 @@
     }
     if (!rows.length) {
       const where = split ? ` ${dir === "inbound" ? "toward" : "away from"} downtown` : "";
-      const line = st.ttLine ? `${lineOf(st.ttLine).short_name} Line ` : "";
-      html.push(`<p class="muted tt-none">No more ${esc(line)}trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
+      html.push(`<p class="muted tt-none">No more trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
     } else {
       const sel = host.selectedTrip();
       const next = rows[0];
@@ -311,14 +397,21 @@
       : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
   }
   $("tt").addEventListener("click", (e) => {
+    if (!st.active) return;
     const b = e.target.closest("[data-cta-dir]");
-    if (!b || !st.active) return;
-    st.ttDir = b.dataset.ctaDir;
-    renderTimetable();
+    if (b) { st.ttDir = b.dataset.ctaDir; renderTimetable(); return; }
+    const l = e.target.closest("[data-cta-ldir]");
+    if (l && l.dataset.ctaLdir !== st.lineDir) {
+      st.lineDir = l.dataset.ctaLdir;
+      st.lineData = null;
+      renderTimetable();
+      refreshLine().then(renderTimetable);
+    }
   });
 
   function render() {
     if (!st.active) return;
+    syncLineMode();
     renderPicker();
     if (host.tab() === "timetable") renderTimetable(); else renderBoard();
   }
@@ -494,7 +587,7 @@
     host.mapView.closePopups();
     host.mapView.clearSelection(false);
     if (host.mapView.lineFocus) host.mapView.setLineFocus(null, { fit: false });
-    if (!on) { stopTimers(); setAttribution(false); host.onMetra(); return; }
+    if (!on) { document.body.classList.remove("cta-line-mode"); stopTimers(); setAttribution(false); host.onMetra(); return; }
     $("board-list").innerHTML = ""; $("tt").innerHTML = "";
     $("board-notice").hidden = true;
     host.applyView();

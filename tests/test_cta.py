@@ -505,3 +505,28 @@ def test_follow_uses_tracked_times_when_recorded(recorder, monkeypatch):
     t._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=FOLLOW)))
     d = run(t.follow("006"))
     assert d["passed"][0]["time"] == _at(8, 5) and d["passed"][0]["source"] == "tracked"
+
+
+# ---- a line's page (Timetable tab, line chip) -----------------------------------------------
+def test_line_page_shows_trains_on_the_way_and_still_to_start(recorder):
+    t = recorder
+    body = {"ctatt": {"errCd": "0", **_pos(("brn", "404", "1", "Kimball", "40500", _at(8, 15), False),
+                                          ("g", "605", "5", "Ashland/63rd", "40200", _at(8, 5), True))}}
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)))
+    assert [(d["id"], d["label"]) for d in t._line_directions("Brn")] == [
+        ("inbound", "Toward downtown"), ("outbound", "Away from downtown")]
+    d = run(t.line("Brn", "outbound", now=_at(8, 10)))
+    [card] = [x for x in d["trains"] if x["running"]]
+    # Started in the Loop (Clark/Lake) at 8:00, next Belmont at 8:15, Kimball 10 min later.
+    assert (card["train"], card["origin"], card["next_id"]) == ("404", "Loop", "40500")
+    assert card["origin_time"] == _at(8, 0) and card["dest_time"] == _at(8, 25) and card["live"]
+    d = run(t.line("Brn", "inbound", now=_at(7, 0)))
+    assert [(x["origin"], x["destination"], x["origin_time"]) for x in d["trains"]] == [("Kimball", "Loop", _at(7, 30))]
+    g = run(t.line("G", "outbound", now=_at(8, 1)))
+    assert [(x["train"], x["delayed"]) for x in g["trains"] if x["running"]] == [("605", True)]
+
+
+def test_line_page_api(api):
+    c, _ = api
+    assert c.get("/api/cta/line?route=Brn").json()["directions"][0]["label"] == "Toward downtown"
+    assert c.get("/api/cta/line?route=Nope").status_code == 404
