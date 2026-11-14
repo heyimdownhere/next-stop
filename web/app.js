@@ -907,6 +907,37 @@
     const m = Math.round(delay / 60);
     return m >= 6 ? "late" : m >= 1 ? "minor" : m <= -1 ? "early" : "ontime";
   }
+  // "On the way now" on a line's page: big cards with progress bars, or a compact list
+  // (one row per train, with a small bar). Shared by Metra's and CTA's line pages; the
+  // choice is remembered on this device.
+  const LINE_VIEW_KEY = "next.lineView";
+  const lineView = () => (localStorage.getItem(LINE_VIEW_KEY) === "list" ? "list" : "cards");
+  function lineViewToggle() {
+    const v = lineView();
+    return `<span class="lt-view" role="group" aria-label="Show running trains as">
+      <button type="button" data-line-view="cards" aria-pressed="${v === "cards"}" title="Cards with progress bars" aria-label="Cards">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v6H4zM4 13h16v6H4z"/></svg></button>
+      <button type="button" data-line-view="list" aria-pressed="${v === "list"}" title="Compact list" aria-label="List">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v2H4zM4 11h16v2H4zM4 17h16v2H4z"/></svg></button>
+    </span>`;
+  }
+  // One running train as a compact row: start time, destination, next stop, a small bar.
+  function runningRow(t, pct, cls, status, extra = "") {
+    return `<li class="lt-row lt-run" data-trip="${esc(t.trip_id)}"${extra}>
+      <span class="lt-time">${bigTime(t.origin_time)}</span>
+      <span class="lt-main"><span>${esc(t.destination || "")}${t.train ? ` <span class="muted small">#${esc(t.train)}</span>` : ""}</span>
+        <span class="muted small">${t.next_stop ? `Next <b>${esc(t.next_stop)}</b> · ` : ""}${status}</span></span>
+      <span class="lt-mini-wrap"><span class="lt-bar lt-mini ${cls}"><span style="width:${pct.toFixed(1)}%"></span></span>
+        <b class="lt-arr small">${esc(fmtTime(t.dest_time))}</b></span>
+    </li>`;
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-line-view]");
+    if (!b || b.getAttribute("aria-pressed") === "true") return;
+    localStorage.setItem(LINE_VIEW_KEY, b.dataset.lineView);
+    renderBoard();
+  });
+
   function renderLineTimetable(d, now) {
     const dirLabel = d.direction === "inbound" ? "toward downtown" : "away from downtown";
     $("board-title").textContent = "Line timetable";
@@ -938,14 +969,16 @@
     const status = (t) => t.cancelled ? '<span class="badge cancel">Cancelled</span>'
       : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking)
       : '<span class="tt-sched">Scheduled</span>';
+    const compact = lineView() === "list";
     if (running.length) {
-      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3><div class="lt-cards">');
+      html.push(`<h3 class="lt-head"><span class="lt-live"></span>On the way now${lineViewToggle()}</h3>${compact ? '<ol class="lt-list lt-running">' : '<div class="lt-cards">'}`);
       for (const t of running) {
         // How far along: time since it (likely) left vs. its scheduled run time.
         const late = Math.max(0, t.delay || 0);
         const span = Math.max(60, (t.dest_time_scheduled || t.dest_time) - t.origin_time);
         const pct = Math.max(3, Math.min(97, ((now - t.origin_time - late) / span) * 100));
         const cls = (t.live || t.tracking) ? delayClass(t.delay) : "sched";
+        if (compact) { html.push(runningRow(t, pct, cls, status(t))); continue; }
         html.push(`<div class="lt-card" data-trip="${esc(t.trip_id)}">
           <div class="lt-card-top"><b>${t.train ? `#${esc(t.train)} ` : ""}to ${esc(t.destination || "")}</b>${status(t)}</div>
           <div class="lt-bar ${cls}"><span style="width:${pct.toFixed(1)}%"></span></div>
@@ -957,7 +990,7 @@
         </div>`);
       }
     }
-    if (running.length) html.push("</div>");
+    if (running.length) html.push(compact ? "</ol>" : "</div>");
     if (later.length) {
       html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
       for (const t of later) {
@@ -1942,7 +1975,7 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow, mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,

@@ -294,11 +294,17 @@
     const status = (t) => (t.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
       : t.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : '<span class="tt-sched">Scheduled</span>');
     const sel = host.selectedTrip();
+    const compact = host.lineView() === "list";
     if (running.length) {
-      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3><div class="lt-cards">');
+      html.push(`<h3 class="lt-head"><span class="lt-live"></span>On the way now${host.lineViewToggle()}</h3>${compact ? '<ol class="lt-list lt-running">' : '<div class="lt-cards">'}`);
       for (const t of running) {
         const span = Math.max(60, t.dest_time - t.origin_time);
         const pct = Math.max(3, Math.min(97, ((now - t.origin_time) / span) * 100));
+        if (compact) {
+          html.push(host.runningRow({ ...t, next_stop: t.next_stop ? nameOf(t.next_id, t.next_stop) : null }, pct,
+            t.delayed ? "late" : "ontime", status(t), ` data-route="${esc(st.ttLine)}"`));
+          continue;
+        }
         html.push(`<div class="lt-card${sel === t.trip_id ? " selected" : ""}" data-trip="${esc(t.trip_id)}" data-route="${esc(st.ttLine)}">
           <div class="lt-card-top"><b>#${esc(t.train)} to ${esc(t.destination || "")}</b>${status(t)}</div>
           <div class="lt-bar ${t.delayed ? "late" : "ontime"}"><span style="width:${pct.toFixed(1)}%"></span></div>
@@ -309,7 +315,7 @@
           </div>
         </div>`);
       }
-      html.push("</div>");
+      html.push(compact ? "</ol>" : "</div>");
     }
     if (later.length) {
       html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
