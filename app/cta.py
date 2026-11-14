@@ -338,7 +338,7 @@ class CtaTracker:
                 if mins is False:
                     return None
                 groups[gk] = {"key": gk, **self._line_info(rid), "platform": None, "destinations": [],
-                              "travel_minutes": mins, "trains": []}
+                              "direction": self._direction(station, gk), "travel_minutes": mins, "trains": []}
             return groups[gk]
 
         if self.live_enabled:

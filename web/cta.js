@@ -206,13 +206,18 @@
     host.showEmpty(d.groups.length ? "" : st.dest ? "No direct trains to that station soon." : "No trains in the next few hours.");
     upd.textContent = d.source === "live" ? `CTA · ${host.fmtTime(d.as_of)}` : "CTA schedule";
     const sel = host.selectedTrip();
+    if (st.dest) { renderTrips(d, now, sel); return; }
+    // Which way each card goes, at the right of its header, like Metra's; downtown (where
+    // that means nothing) the platform instead.
+    const DIR = { inbound: "Toward downtown", outbound: "Away from downtown" };
     list.innerHTML = setupCard() + d.groups.map((g) => {
       const x = g.trains[0];
       const arrives = (t) => (t.arrives ? ` · arrives ${esc(host.fmtTime(t.arrives))}` : "");
-      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${tripId(t.run)}" data-route="${esc(g.route_id)}"` : ""}><b>${Math.max(0, Math.round((t.time - now) / 60))} min</b> · ${esc(host.fmtTime(t.time))}${g.destinations.length > 1 ? ` · ${esc(t.destination)}` : ""}</button>`).join("");
+      // "Then": time · destination, like Metra's.
+      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${tripId(t.run)}" data-route="${esc(g.route_id)}"` : ""}><b>${esc(host.fmtTime(t.time))}</b> · ${esc(t.destination || g.label)}</button>`).join("");
       const dest = g.destinations.length > 1 ? x.destination : g.label;
       return `<li class="lc cta-lc${sel && sel === tripId(x.run) ? " selected" : ""}" style="--line:${esc(g.color)}">
-        <div class="lc-top">${host.chip(g.route_short, g.color, g.text_color)}<span class="lc-name">${esc(g.route_name)}</span><span class="lc-dir">${esc(g.platform || "")}</span></div>
+        <div class="lc-top">${host.chip(g.route_short, g.color, g.text_color)}<span class="lc-name">${esc(g.route_name)}</span><span class="lc-dir">${esc(DIR[g.direction] || g.platform || "")}</span></div>
         <button type="button" class="lc-next"${x.run ? ` data-trip="${tripId(x.run)}" data-route="${esc(g.route_id)}"` : ""} title="Show this train on the map">
           <span class="lc-time">${host.bigTime(x.time)}</span>
           <span class="lc-main"><span class="lc-dest">${esc(dest)}</span>
@@ -221,6 +226,32 @@
         </button>
         ${later ? `<div class="lc-later"><span class="muted">Then</span>${later}</div>` : ""}
         ${historyHtml(g.history)}
+      </li>`;
+    }).join("");
+    const dl = $("data-line");
+    dl.hidden = false;
+    dl.textContent = d.source === "live" ? d.credit
+      : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
+  }
+
+  // With a Going to station: one row per trip, soonest first, like Metra's
+  // ("Arrives 12:34 PM · 28 min", line chip, status, run number).
+  function renderTrips(d, now, sel) {
+    const list = $("board-list");
+    const to = nameOf(st.dest);
+    const rows = d.groups.flatMap((g) => g.trains.map((t) => ({ ...t, g })))
+      .sort((a, b) => a.time - b.time).slice(0, Math.max(1, host.boardCount()));
+    list.innerHTML = setupCard() + rows.map((r) => {
+      const g = r.g, trip = r.run ? tripId(r.run) : null;
+      const ride = r.arrives ? Math.round((r.arrives - r.time) / 60) : null;
+      const status = r.delayed ? '<span class="badge cancel" title="CTA says this train is delayed">Delayed</span>'
+        : r.live ? '<span class="badge live">Live</span>' : '<span class="badge sched">Scheduled</span>';
+      const beyond = r.destination && r.destination !== to ? `<span class="beyond" title="Continues to ${esc(r.destination)}">→ ${esc(r.destination)}</span>` : "";
+      return `<li class="dep cta-dep${trip && sel === trip ? " selected" : ""}" style="--line:${esc(g.color)}"${trip ? ` data-trip="${trip}" data-route="${esc(g.route_id)}" tabindex="0" role="button" title="Show this train on the map"` : ""}>
+        <div class="timecol"><div class="time">${host.bigTime(r.time)}</div></div>
+        <div class="main"><div class="dest arr-head">${r.arrives ? `Arrives <b>${esc(host.fmtTime(r.arrives))}</b> <span class="trip">· ${ride} min</span>` : esc(r.destination || g.label)}</div>
+          <div class="meta">${host.chip(g.route_short, g.color, g.text_color)} ${status}${r.run ? ` <span class="muted">#${esc(r.run)}</span>` : ""}${beyond}</div></div>
+        <div class="mins">${untilHtml(r, now)}</div>
       </li>`;
     }).join("");
     const dl = $("data-line");
@@ -544,8 +575,7 @@
   }
   const stationName = (id) => (st.byId.get(id) || {}).display || "";
   // "Set up your commute" on the board when CTA has no home yet: the same card as Metra's.
-  const setupCard = () => (st.profile && st.profile.home_station ? ""
-    : '<li class="setup-card"><div><b>Set up your commute</b><br><span class="muted small">Pick your home (and work) station so the app opens on the right trains.</span></div><button type="button" class="primary" id="setup-commute">Set up</button></li>');
+  const setupCard = () => host.setupCardHtml(!!(st.profile && st.profile.home_station));
 
   // Home / Work on the board: the commute that way, or set it from the current station.
   function goTrip(kind) {
@@ -656,7 +686,7 @@
     $("board-list").addEventListener("click", (e) => {
       if (!st.active) return;
       const b = e.target.closest("[data-trip]");
-      if (b && b.closest(".cta-lc")) host.pickTrain(b.dataset.trip, b.dataset.route);
+      if (b && b.closest(".cta-lc, .cta-dep")) host.pickTrain(b.dataset.trip, b.dataset.route);
     });
     document.addEventListener("visibilitychange", () => { if (st.active && document.visibilityState === "visible") { refreshAll(); refreshAlerts(); } });
     document.body.classList.toggle("sys-cta", st.active);
