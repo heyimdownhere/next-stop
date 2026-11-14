@@ -941,6 +941,8 @@ body:not(.tt-station-mode) #home-btn, body:not(.tt-station-mode) #work-btn { dis
 @media (max-width: 520px) { .brand h1 { display: none; } }
 body.sys-cta #picker, body.sys-cta .line-card-more, body.sys-cta #board-notice { display: none !important; }
 body:not(.sys-cta) #cta-picker { display: none !important; }
+/* A CTA line's page (Timetable tab, line chip): no station boxes or board title, like Metra's. */
+body.cta-line-mode #cta-picker, body.cta-line-mode .board-head { display: none !important; }
 #board-title .arrow { color: var(--muted); font-weight: 600; }
 .cta-lc .lc-in b { font-size: 26px; }
 .cta-lc .lc-dest small { font-weight: 500; }

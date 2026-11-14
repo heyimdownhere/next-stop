@@ -101,6 +101,16 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
         station_or_404(to or None)
         return _json(await cta.timetable_live(station, to=to or None))
 
+    @r.get("/line")
+    async def line(route: str = Query(..., min_length=1, max_length=10, description="Line id, e.g. Brn"),
+                   direction: str | None = Query(None, description="inbound or outbound (see `directions`)")):
+        """One line in one direction: trains on the way now (live) and still to start today."""
+        need_schedule()
+        try:
+            return _json(await cta.line(route, direction))
+        except KeyError:
+            raise HTTPException(404, f"Unknown CTA line {route!r}. See /api/cta/lines for ids.")
+
     @r.get("/trains")
     async def trains():
         """Every L train's live position."""

@@ -23,6 +23,7 @@ import asyncio
 import logging
 import math
 import time
+from typing import Any
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,7 +36,7 @@ from .cta_live import (  # noqa: F401  (re-exported: the API and tests import th
 )
 from .cta_recorder import Recorder
 from .cta_schedule import (  # noqa: F401
-    CREDIT, LINE_ORDER, SHORT_NAMES, TZ, CtaCache, CtaSchedule, _platform, group_key, local_hour,
+    CREDIT, DIRECTIONAL, LINE_ORDER, SHORT_NAMES, TZ, CtaCache, CtaSchedule, _platform, group_key, local_hour,
     parse_cta_time, parse_cta_zip, route_id, service_date,
 )
 from .history import day_type
@@ -91,6 +92,7 @@ class CtaTracker:
         self._tasks: list[asyncio.Task] = []
         self._meta: dict | None = None
         self._ends: dict[str, dict] = {}
+        self._dirs: dict[str, dict] = {}
         self.live = TrainTracker(api_key, lambda: self._client, self.cache.dir / "budget.json")
         # History (its own database), filled by the recorder.
         self.history = CtaHistory(config_dir / "cta-history.db", history_days)
@@ -590,6 +592,126 @@ class CtaTracker:
         rows.sort(key=lambda r: r["time"])
         d.update(departures=rows, source="live", as_of=board["as_of"])
         return d
+
+    # ---- one line's trains (the Timetable tab's line chips) ---------------------------
+    def _line_directions(self, route: str) -> list[dict]:
+        """The two ways a line runs, each with its groups (line + direction/destination)
+        and a label. Lines that end downtown (Brown, Orange, Pink, Purple, Yellow) go
+        "toward" or "away from downtown"; lines that run through it (Red, Blue,
+        Green) are labelled by where they go ("To Howard", "To 95th/Dan Ryan")."""
+        sch = self._need_schedule()
+        cache = self._dirs.setdefault(sch.version, {})
+        if route in cache:
+            return cache[route]
+        groups: list[dict[str, Any]] = []
+        for gk, seqs in sch.sequences.items():
+            if gk.split(":", 1)[0] != route or not seqs:
+                continue
+            seq = max(seqs, key=len)
+            start, end = self._loop_dist(seq[0]) or 0, self._loop_dist(seq[-1]) or 0
+            through = min(start, end) > DOWNTOWN_M and any((self._loop_dist(x) or 1e9) <= DOWNTOWN_M for x in seq)
+            groups.append({"key": gk, "start": start, "end": end, "through": through,
+                           "lasts": {q[-1] for q in seqs}})  # every branch's last stop
+        through = any(g["through"] for g in groups)
+        out: list[dict] = []
+        if through:
+            # Each direction code (1, 5) is one way; label it by its usual last stop.
+            for code in ("1", "5"):
+                gs = [g for g in groups if g["key"].endswith(":" + code)]
+                if gs:
+                    ends = sorted({self.station(x)["name"].split(" (")[0] for g in gs for x in g["lasts"]})
+                    out.append({"id": "inbound" if code == "1" else "outbound",
+                                "label": "To " + " · ".join(ends), "groups": [g["key"] for g in gs]})
+        else:
+            inbound = [g["key"] for g in groups if g["end"] < g["start"]]
+            outbound = [g["key"] for g in groups if g["end"] >= g["start"]]
+            out = [{"id": "inbound", "label": "Toward downtown", "groups": inbound},
+                   {"id": "outbound", "label": "Away from downtown", "groups": outbound}]
+        cache[route] = out
+        return out
+
+    def _origin_label(self, route: str, station: str) -> str:
+        """Where a trip starts, as riders say it: a loop line's trains starting in
+        the Loop start from "Loop", not from whichever Loop station it is."""
+        if route not in DIRECTIONAL and (self._loop_dist(station) or 1e9) <= DOWNTOWN_M:
+            return "Loop"
+        return self.station(station)["name"]
+
+    async def line(self, route: str, direction: str | None = None, now: float | None = None) -> dict:
+        """One line in one direction, like Metra's line timetable: the trains on the
+        way now (from Train Tracker's positions: where each started, its next stop,
+        when it reaches the end of the line) and the trains still to start today."""
+        now = time.time() if now is None else now
+        sch = self._need_schedule()
+        if route not in sch.lines:
+            raise KeyError(route)
+        dirs = self._line_directions(route)
+        chosen = next((d for d in dirs if d["id"] == direction), dirs[0] if dirs else None)
+        keys = set(chosen["groups"]) if chosen else set()
+        info = self._line_info(route)
+        running: list[dict[str, Any]] = []
+        later: list[dict[str, Any]] = []
+        source, error, as_of = "schedule", None, None
+        if self.live_enabled:
+            try:
+                body = await self.live.positions()
+                source, as_of = "live", parse_cta_time(body.get("tmst"))
+                for rid, t in iter_positions(body):
+                    if rid != route:
+                        continue
+                    nxt, gk = str(t.get("nextStaId") or ""), group_key(rid, t.get("trDr"), t.get("destNm"))
+                    seqs = [q for q in sch.sequences.get(gk, []) if nxt in q]
+                    if gk not in keys or not seqs:
+                        continue
+                    seq = max(seqs, key=len)
+                    origin, end = seq[0], seq[-1]
+                    arr = parse_cta_time(t.get("arrT")) or now
+                    to_next = sch.reach.get((origin, gk), {}).get(nxt, 0) if origin != nxt else 0
+                    to_end = sch.reach.get((nxt, gk), {}).get(end, 0) if nxt != end else 0
+                    running.append({
+                        "trip_id": f"cta:{t.get('rn')}", "train": t.get("rn"), "running": True,
+                        "origin": self._origin_label(route, origin), "origin_id": origin,
+                        "origin_time": min(now, arr - to_next * 60),
+                        "destination": t.get("destNm"), "dest_id": end,
+                        "dest_time": arr + to_end * 60, "dest_time_scheduled": arr + to_end * 60,
+                        "next_stop": t.get("nextStaNm"), "next_id": nxt,
+                        "live": True, "delayed": t.get("isDly") == "1", "delay": None,
+                        "cancelled": False, "tracking": False, "direction": chosen["id"] if chosen else None,
+                    })
+            except TrainTrackerError as exc:
+                error = self.live.error = str(exc)
+        # Still to start today: scheduled departures from where each group's trips begin.
+        today = datetime.fromtimestamp(now, TZ).date()
+        if now - datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp() < 3 * 3600:
+            today -= timedelta(days=1)  # before 3 AM: yesterday's service day
+        midnight = datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp()
+        services = sch.active_services(today)
+        for gk in sorted(keys):
+            starts = {seq[0] for seq in sch.sequences.get(gk, [])}
+            for origin in starts:
+                by_service = sch.deps.get(origin, {}).get(gk, {})
+                for sid in services & by_service.keys():
+                    for secs, sign in by_service[sid]:
+                        t0 = midnight + secs
+                        if t0 <= now + 60:
+                            continue
+                        ends = self._end_minutes(origin, gk)
+                        mins = ends.get(sign)
+                        later.append({
+                            "trip_id": None, "train": None, "running": False,
+                            "origin": self._origin_label(route, origin), "origin_id": origin, "origin_time": t0,
+                            "destination": sign, "dest_time": t0 + mins * 60 if mins is not None else None,
+                            "dest_time_scheduled": t0 + mins * 60 if mins is not None else None,
+                            "next_stop": None, "live": False, "delayed": False, "delay": None,
+                            "cancelled": False, "tracking": False, "direction": chosen["id"] if chosen else None,
+                        })
+        running.sort(key=lambda r: r["dest_time"])
+        later.sort(key=lambda r: r["origin_time"])
+        return {"system": "cta", "route": route, **info,
+                "direction": chosen["id"] if chosen else None,
+                "directions": [{"id": d["id"], "label": d["label"]} for d in dirs],
+                "trains": running + later, "source": source, "error": error, "as_of": as_of,
+                "server_time": now, "credit": CREDIT}
 
     async def trains(self) -> dict:
         """Every L train's position (for the map)."""
