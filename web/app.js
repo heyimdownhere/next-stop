@@ -836,15 +836,43 @@
     return "&limit=40";
   }
 
+  // The last data for each board, by request, so a tab switch can draw it at once
+  // (instead of an empty board) while the fresh copy loads.
+  const boardCache = new Map();
+  const BOARD_CACHE_MS = 3 * 60 * 1000;
+  function departuresUrl(tab) {
+    if (tab === "timetable" && state.ttLine) {
+      return `/api/line?route=${encodeURIComponent(state.ttLine.route)}&direction=${state.ttLine.direction}`;
+    }
+    if (!state.station) return null;
+    const to = state.dest ? `&to=${encodeURIComponent(state.dest)}` : "";
+    return tab === "timetable"
+      ? `/api/timetable?station=${encodeURIComponent(state.station)}`
+      : `/api/departures?station=${encodeURIComponent(state.station)}${to}${lineQuery()}`;
+  }
+  function cacheBoard(url, d) {
+    boardCache.delete(url);
+    boardCache.set(url, { d, at: Date.now() });
+    if (boardCache.size > 12) boardCache.delete(boardCache.keys().next().value);
+  }
+  function cachedBoard(tab) {
+    const url = departuresUrl(tab);
+    const hit = url && boardCache.get(url);
+    if (!hit || Date.now() - hit.at > BOARD_CACHE_MS) return null;
+    return { ...hit.d, tab };
+  }
+
   async function refreshDepartures() {
     if (CTA.active()) return;  // cta.js loads CTA's boards
     if (state.tab === "timetable" && state.ttLine) {
       const { route, direction } = state.ttLine;
+      const url = departuresUrl("timetable");
       let d;
-      try { d = await api(`/api/line?route=${encodeURIComponent(route)}&direction=${direction}`); } catch (e) { console.warn(e); return; }
+      try { d = await api(url); } catch (e) { console.warn(e); return; }
       if (state.tab !== "timetable" || !state.ttLine || state.ttLine.route !== route || state.ttLine.direction !== direction) return;
       d.tab = "timetable";
       d.kind = "line";
+      cacheBoard(url, d);
       state.departures = d;
       renderBoard();
       return;
@@ -861,13 +889,12 @@
       return;
     }
     try {
-      const to = state.dest ? `&to=${encodeURIComponent(state.dest)}` : "";
       const tab = state.tab;
-      const d = tab === "timetable"
-        ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}`)
-        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}${lineQuery()}`);
+      const url = departuresUrl(tab);
+      const d = await api(url);
       if (tab !== state.tab) return;  // switched tabs while loading
       d.tab = tab;
+      cacheBoard(url, d);
       state.departures = d;
     } catch (e) {
       console.warn(e);
@@ -1089,8 +1116,10 @@
   }
 
   // The board re-renders every 15-30 s; only animate when the view itself changes
-  // (another station, direction, line or tab), so a refresh never flickers.
+  // (another station, direction or line), so a refresh never flickers. A tab switch
+  // doesn't animate the rows either: the panel's slide is enough (quietBoard).
   let lastBoardKey = null;
+  let quietBoard = false;
   function renderBoard() {
     if (CTA.active()) return CTA.render();
     renderBoardInner();
@@ -1098,7 +1127,7 @@
     if (!d) return;
     const key = [d.tab, d.station && d.station.id, d.to && d.to.id, d.route, d.direction, d.tab === "timetable" && !d.kind ? state.ttStationDir : ""].join("|");
     if (key !== lastBoardKey) {
-      if (lastBoardKey !== null) {
+      if (lastBoardKey !== null && !quietBoard) {
         if (d.tab === "timetable") $("tt").querySelectorAll(".lt-cards, .lt-list, .tt-list").forEach(staggerIn);
         else staggerIn($("board-list"));
         fadeIn($("board-title"));
@@ -1110,6 +1139,7 @@
       }
       lastBoardKey = key;
     }
+    quietBoard = false;
   }
 
   function renderBoardInner() {
@@ -1511,7 +1541,9 @@
     const reload = boardKind(state.tab) !== boardKind(b.dataset.tab);
     state.tab = b.dataset.tab;
     localStorage.setItem(TAB_KEY, state.tab);
-    if (reload) state.departures = null;
+    // Draw the last copy of this board right away (if recent), then refresh it.
+    if (reload) state.departures = CTA.active() ? null : cachedBoard(state.tab);
+    quietBoard = true;
     tabSwitching = true;
     applyView();
     tabSwitching = false;
@@ -1520,7 +1552,7 @@
     if (window.scrollY > tabsTop) window.scrollTo(0, 0);
     slidePanel(TAB_ORDER.indexOf(state.tab) > TAB_ORDER.indexOf(prevTab) ? "right" : "left");
     if (CTA.active()) CTA.tabChanged();
-    else if (reload) refreshDepartures();
+    else if (reload) { if (state.departures) renderBoard(); refreshDepartures(); }
   }));
 
   const TAB_ORDER = ["live", "timetable", "map"];
@@ -1552,7 +1584,7 @@
       $("map-head").hidden = true;
       if (mapView.lineFocus) mapView.setLineFocus(null, { fit: false });
     }
-    if (wasMapOnly !== (state.tab === "map") || (wasHidden && !mapHidden())) fadeIn(document.querySelector(".map-wrap"));
+    if (!tabSwitching && (wasMapOnly !== (state.tab === "map") || (wasHidden && !mapHidden()))) fadeIn(document.querySelector(".map-wrap"));
     // The map's box changes size between tabs: fit it again (and catch up on trains if it was hidden).
     requestAnimationFrame(() => {
       if (mapHidden()) return;

@@ -848,9 +848,10 @@ body.tt-station-mode .hide-pickers { display: none; }
 :root { --ease: cubic-bezier(.22, 1, .36, 1); --t-fast: .2s; --t: .34s; --t-slow: .48s; }
 @keyframes fade-up   { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes fade-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-/* Tab switch: the page glides in from the side of the tab you tapped. */
-@keyframes glide-from-right { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
-@keyframes glide-from-left  { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+/* Tab switch: the page glides in from the side of the tab you tapped. No fade:
+   starting from transparent made the dark background flash through on every tap. */
+@keyframes glide-from-right { from { transform: translateX(14px); } to { transform: none; } }
+@keyframes glide-from-left  { from { transform: translateX(-14px); } to { transform: none; } }
 .panel.tab-in-right > :not(.tabs) { animation: glide-from-right var(--t-slow) var(--ease) both; }
 .panel.tab-in-left > :not(.tabs)  { animation: glide-from-left var(--t-slow) var(--ease) both; }
 .tabs::before { transition-duration: .4s; }
