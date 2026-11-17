@@ -34,6 +34,15 @@
     $("sch-dir").addEventListener("change", (e) => { st.direction = e.target.value; load(); });
     $("sch-time").addEventListener("change", () => { st.time = inputSecs($("sch-time").value); zoom(true); });
     $("sch-station").addEventListener("change", () => { st.station = $("sch-station").value; render(); zoom(true); });
+    // Tap a station's name: it becomes the station at the top, and the grid jumps there.
+    $("sch-grid").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-station]");
+      if (!b || b.dataset.station === st.station) return;
+      st.station = b.dataset.station;
+      $("sch-station").value = st.station;
+      render();
+      zoom(true);
+    });
     $("sch-now").addEventListener("click", () => {
       st.time = null;
       syncTime();
@@ -133,21 +142,23 @@
     const ref = (t) => (si >= 0 && t.times[si] != null ? t.times[si] : t.last);
     const gone = (t) => now != null && ref(t) < now;
     const next = now == null ? null : d.trains.find((t) => !gone(t) && si >= 0 && t.times[si] != null);
-    const head = d.trains.map((t, j) => {
-      const s = gone(t) ? " gone" : t === next ? " next" : "";
-      const tag = t === next ? "Next" : t.express ? "Express" : gone(t) ? "Departed" : "Local";
-      return `<th class="h${s}${t.express ? " x" : ""}" data-col="${j}" scope="col"><button type="button" data-trip="${esc(t.trip_id)}" aria-label="Train ${esc(t.train || "")}: every stop"><b>${esc(t.train || "—")}</b><span>${tag}</span></button></th>`;
-    }).join("");
+    // Laid out like the printed timetable: AM or PM under each train number (for its time
+    // at your station: a train can leave before noon and reach you after), a heavy line
+    // where that changes, striped rows, and every time marked a or p.
+    const half = d.trains.map((t) => (isPm(ref(t)) ? "PM" : "AM"));
+    const cls = (t, j) => [gone(t) ? "gone" : t === next ? "next" : "", j > 0 && half[j] !== half[j - 1] ? "turn" : ""];
+    const nums = d.trains.map((t, j) => `<th class="${["h num", ...cls(t, j)].join(" ")}" data-col="${j}" scope="col"><button type="button" data-trip="${esc(t.trip_id)}" aria-label="Train ${esc(t.train || "")}: every stop">${esc(t.train || "—")}</button></th>`).join("");
+    const subs = d.trains.map((t, j) => `<th class="${["h sub", ...cls(t, j), t.express ? "x" : ""].join(" ")}" data-col="${j}"${t === next ? ' title="Next train"' : ""}>${half[j]}${t.express ? '<span class="xp">Exp</span>' : ""}</th>`).join("");
     const rows = d.stations.map((s, i) => {
       const cells = d.trains.map((t, j) => {
         const v = t.times[i];
-        const cls = ["c", gone(t) ? "gone" : t === next ? "next" : "", v != null && isPm(v) ? "pm" : "", v == null ? (t.pass[i] ? "skip" : "none") : ""].filter(Boolean).join(" ");
-        return `<td class="${cls}" data-col="${j}">${v != null ? hhmm(v) : t.pass[i] ? "↓" : ""}</td>`;
+        const c = ["c", ...cls(t, j), v != null && isPm(v) ? "pm" : "", v == null ? "none" : ""].filter(Boolean).join(" ");
+        return `<td class="${c}" data-col="${j}">${v != null ? `${hhmm(v)}<span class="ap">${isPm(v) ? "p" : "a"}</span>` : ""}</td>`;
       }).join("");
-      const cls = i === si ? " home" : i === 0 || i === d.stations.length - 1 ? " end" : "";
-      return `<tr class="r${cls}" data-row="${i}"><th class="sn" scope="row">${esc(s.name)}</th>${cells}</tr>`;
+      const rc = ["r", i === si ? "home" : "", i % 2 ? "z" : "", i === 0 || i === d.stations.length - 1 ? "end" : ""].filter(Boolean).join(" ");
+      return `<tr class="${rc}" data-row="${i}"><th class="sn" scope="row"><button type="button" class="sn-pick" data-station="${esc(s.id)}" aria-label="Jump to ${esc(s.name)}" aria-pressed="${i === si}">${esc(s.name)}</button></th>${cells}</tr>`;
     }).join("");
-    $("sch-grid").innerHTML = `<thead><tr><th class="corner" scope="col">Station</th>${head}</tr></thead><tbody>${rows}</tbody>`;
+    $("sch-grid").innerHTML = `<thead><tr><th class="corner num" scope="col"></th>${nums}</tr><tr><th class="corner sub" scope="col">Station</th>${subs}</tr></thead><tbody>${rows}</tbody>`;
     const date = new Date(`${d.date}T12:00:00`);
     const dayName = new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
     $("sch-sub").textContent = `${d.trains.length} trains · ${d.today ? "today, " : ""}${dayName}`;
@@ -173,7 +184,9 @@
     if (cell) cell.classList.add("target");
     const side = grid.querySelector(".corner").offsetWidth;
     const headH = grid.querySelector("thead").offsetHeight;
-    const left = cell ? Math.max(0, cell.offsetLeft - side) : 0;
+    // Leave the train before it in view too, so you can see where AM turns to PM.
+    const before = cell && cell.previousElementSibling && cell.previousElementSibling.matches("td") ? cell.previousElementSibling.offsetWidth : 0;
+    const left = cell ? Math.max(0, cell.offsetLeft - side - before) : 0;
     const top = Math.max(0, row.offsetTop - headH - (box.clientHeight - headH) / 2 + row.offsetHeight / 2);
     box.scrollTo({ left, top, behavior: smooth && !host.reduceMotion() ? "smooth" : "auto" });
     const t = d.trains[j];
