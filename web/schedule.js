@@ -158,7 +158,7 @@
       const rc = ["r", i === si ? "home" : "", i % 2 ? "z" : "", i === 0 || i === d.stations.length - 1 ? "end" : ""].filter(Boolean).join(" ");
       return `<tr class="${rc}" data-row="${i}"><th class="sn" scope="row"><button type="button" class="sn-pick" data-station="${esc(s.id)}" aria-label="Jump to ${esc(s.name)}" aria-pressed="${i === si}">${esc(s.name)}</button></th>${cells}</tr>`;
     }).join("");
-    $("sch-grid").innerHTML = `<thead><tr><th class="corner num" scope="col"></th>${nums}</tr><tr><th class="corner sub" scope="col">Station</th>${subs}</tr></thead><tbody>${rows}</tbody>`;
+    $("sch-grid").innerHTML = `<thead><tr><th class="corner num" scope="col">Train</th>${nums}</tr><tr><th class="corner sub" scope="col">Station</th>${subs}</tr></thead><tbody>${rows}</tbody>`;
     const date = new Date(`${d.date}T12:00:00`);
     const dayName = new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
     $("sch-sub").textContent = `${d.trains.length} trains · ${d.today ? "today, " : ""}${dayName}`;
@@ -190,8 +190,9 @@
     const top = Math.max(0, row.offsetTop - headH - (box.clientHeight - headH) / 2 + row.offsetHeight / 2);
     box.scrollTo({ left, top, behavior: smooth && !host.reduceMotion() ? "smooth" : "auto" });
     const t = d.trains[j];
-    $("sch-jump-note").textContent = t && t.times[si] != null
-      ? `#${t.train || "—"} at ${hhmm(t.times[si])} ${isPm(t.times[si]) ? "PM" : "AM"}${t.express ? " · Express" : ""}`
+    const when = (v) => `${hhmm(v)} ${isPm(v) ? "PM" : "AM"}`;
+    $("sch-jump-note").innerHTML = t && t.times[si] != null
+      ? `${st.time != null ? `First train after ${when(st.time)}` : "Next train"}: <b>#${host.esc(t.train || "—")} at ${when(t.times[si])}</b>${t.express ? " · Express" : ""}`
       : "";
   }
 
