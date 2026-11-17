@@ -561,19 +561,21 @@ class BoardQueries(MapQueries):
         # short turns) slotted in after the station they follow.
         order: list[str] = []
         for _, _, sts in sorted(runs, key=lambda r: -len(r[2])):
-            prev = None
+            prev: str | None = None
             for x in sts:
                 stop = x[S_STOP]
                 if stop not in order:
-                    order.insert(order.index(prev) + 1 if prev in order else (0 if prev is None else len(order)), stop)
+                    at = 0 if prev is None else order.index(prev) + 1 if prev in order else len(order)
+                    order.insert(at, stop)
                 prev = stop
         # Sort by the time at the downtown end, as the printed timetable does.
         ends = [r[2][-1 if direction == "inbound" else 0][S_STOP] for r in runs]
-        anchor = max(set(ends), key=ends.count) if ends else None
-        trains = []
+        anchor: str = max(set(ends), key=ends.count) if ends else ""
+        trains: list[tuple[int, dict]] = []
         for trip_id, trip, sts in runs:
             times: dict[str, int] = {x[S_STOP]: (x[S_DEP] if x[S_DEP] is not None else x[S_ARR]) for x in sts}
-            key = times.get(anchor, sts[0][S_DEP])
+            first = sts[0][S_DEP] if sts[0][S_DEP] is not None else sts[0][S_ARR]
+            key: int = times.get(anchor, first or 0)
             num = re.match(r"[^_]+_[A-Z]+(\d+)_", trip_id)
             trains.append((key, {"trip_id": trip_id, "train": trip[T_SHORT_NAME] or (num.group(1) if num else None),
                                  "times": [times.get(stop) for stop in order]}))
