@@ -26,7 +26,7 @@ from bisect import bisect_left
 from datetime import date, timedelta
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 from pmtiles.tile import Compression, deserialize_directory, deserialize_header, find_tile, zxy_to_tileid
 from pmtiles.writer import Writer
 

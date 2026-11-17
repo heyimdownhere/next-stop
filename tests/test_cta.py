@@ -10,7 +10,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -308,8 +308,8 @@ def test_alerts_keep_L_lines_and_stations_only(tmp_path, schedule):
 
 
 def test_key_never_reaches_the_log(caplog):
-    with caplog.at_level(logging.INFO, logger="httpx"):
-        logging.getLogger("httpx").info('HTTP Request: GET %s "200"',
+    with caplog.at_level(logging.INFO, logger="httpx2"):
+        logging.getLogger("httpx2").info('HTTP Request: GET %s "200"',
                                         "https://lapi.transitchicago.com/api/1.0/ttarrivals.aspx?mapid=1&key=SECRETKEY99&outputType=JSON")
     assert "SECRETKEY99" not in caplog.text and "key=***" in caplog.text
 

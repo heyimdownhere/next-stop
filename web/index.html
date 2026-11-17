@@ -401,11 +401,13 @@
     </div>
   </section>
 
-  <script src="vendor/maplibre/maplibre-gl.js"></script>
-  <script src="vendor/protomaps/basemaps.js"></script>
-  <script src="map.js"></script>
-  <script src="cta.js"></script>
-  <script src="schedule.js"></script>
-  <script src="app.js"></script>
+  <!-- MapLibre is an ES module (sets window.maplibregl); the rest are deferred so they
+       run after it, in this order. -->
+  <script type="module" src="vendor/maplibre/global.mjs"></script>
+  <script defer src="vendor/protomaps/basemaps.js"></script>
+  <script defer src="map.js"></script>
+  <script defer src="cta.js"></script>
+  <script defer src="schedule.js"></script>
+  <script defer src="app.js"></script>
 </body>
 </html>

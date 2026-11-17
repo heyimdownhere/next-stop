@@ -193,7 +193,7 @@ class RedactSecrets(logging.Filter):
 
 def install_redaction() -> None:
     """Put the filter on every handler in use now (ours and uvicorn's)."""
-    names = ["", "uvicorn", "uvicorn.error", "uvicorn.access", "httpx", "httpcore"]
+    names = ["", "uvicorn", "uvicorn.error", "uvicorn.access", "httpx2", "httpcore2"]
     for name in names:
         logger = logging.getLogger(name)
         for target in (logger, *logger.handlers):

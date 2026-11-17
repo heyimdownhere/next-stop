@@ -23,7 +23,7 @@ ONLINE_MAP_HOSTS = "https://tiles.openfreemap.org https://server.arcgisonline.co
 
 # index.html links each script/stylesheet as "file?v=<content hash>", so the browser
 # can keep those files for a year and only fetches one again after it changes.
-ASSET_REF = re.compile(r'(?P<attr>(?:src|href))="(?P<path>[^"?#:]+\.(?:js|css))"')
+ASSET_REF = re.compile(r'(?P<attr>(?:src|href))="(?P<path>[^"?#:]+\.(?:m?js|css))"')
 INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 
 

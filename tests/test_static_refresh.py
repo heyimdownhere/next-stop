@@ -8,7 +8,7 @@ import os
 import time
 import zipfile
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from app.config import Settings

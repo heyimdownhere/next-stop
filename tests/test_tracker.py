@@ -540,8 +540,9 @@ def test_responses_are_gzipped(tmp_path, monkeypatch):
 
     import app.main as main
     main = importlib.reload(main)
-    r = TestClient(main.app).get("/vendor/maplibre/maplibre-gl.js", headers={"Accept-Encoding": "gzip"})
+    r = TestClient(main.app).get("/vendor/maplibre/maplibre-gl.mjs", headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert r.headers["content-type"].startswith("text/javascript")  # browsers only run modules served as JS
 
 
 def test_finished_trips_are_not_tracked_or_shown(tracker):

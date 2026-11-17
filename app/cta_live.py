@@ -17,7 +17,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-import httpx
+import httpx2 as httpx
 
 from .cta_schedule import TZ, route_id
 from .util import SingleFlight, atomic_write, install_redaction

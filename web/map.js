@@ -537,10 +537,14 @@
     function applyLineHighlight() {
       if (!map.getLayer("lines")) return;
       const op = settings.lineOpacity / 100;
-      const w = (k) => ["interpolate", ["linear"], ["zoom"], 8, settings.lineWidth * 0.6 * k, 14, settings.lineWidth * 1.6 * k];
       const rid = (selected && selected.routeId) || lineFocus;
+      // Zoom must be the outermost expression (only one zoom curve is allowed), so the
+      // highlighted line's extra width goes inside each stop.
+      const k = rid ? ["case", ["==", ["get", "route_id"], rid], 1.5, 1] : 1;
+      const at = (base) => (rid ? ["*", base, k] : base);
+      const w = ["interpolate", ["linear"], ["zoom"], 8, at(settings.lineWidth * 0.6), 14, at(settings.lineWidth * 1.6)];
       map.setPaintProperty("lines", "line-opacity", rid ? ["case", ["==", ["get", "route_id"], rid], Math.max(op, 0.95), op * 0.25] : op);
-      map.setPaintProperty("lines", "line-width", rid ? ["case", ["==", ["get", "route_id"], rid], w(1.5), w(1)] : w(1));
+      map.setPaintProperty("lines", "line-width", w);
     }
     function markSelected() {
       for (const [id, m] of trainMarkers) m.getElement().classList.toggle("selected", !!selected && id === selected.id);

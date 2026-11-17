@@ -6,7 +6,7 @@ import gzip
 from datetime import date
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pmtiles.reader import MmapSource, Reader
 from pmtiles.tile import Compression, TileType, tileid_to_zxy, zxy_to_tileid
@@ -167,8 +167,8 @@ def test_index_links_are_versioned_and_cached():
     page = c.get("/")
     assert page.headers["cache-control"] == "no-cache"
     import re
-    links = re.findall(r'(?:src|href)="([^"]+\.(?:js|css)\?v=[0-9a-f]{10})"', page.text)
-    assert any(l.startswith("app.js?v=") for l in links) and any("maplibre-gl.js?v=" in l for l in links)
+    links = re.findall(r'(?:src|href)="([^"]+\.(?:m?js|css)\?v=[0-9a-f]{10})"', page.text)
+    assert any(l.startswith("app.js?v=") for l in links) and any("maplibre/global.mjs?v=" in l for l in links)
     for link in links:
         r = c.get("/" + link)
         assert r.status_code == 200
