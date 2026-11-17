@@ -993,6 +993,7 @@
     const html = [`<div class="lt-hero" style="--line:${esc(d.color || "")}">
         <div class="lt-name">${chip(d.route_short, d.color, d.text_color)}<b>${esc(d.route_name)}</b></div>
         <div class="lt-sub">${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+        <button type="button" class="lt-full" data-schedule="${esc(d.route)}" data-sch-dir="${esc(d.direction)}">Full schedule ›</button>
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${d.direction === "inbound"}">Toward downtown</button>
@@ -1043,6 +1044,11 @@
     }
     $("tt").innerHTML = html.join("");
   }
+  // "Full schedule": the line's whole timetable, like the printed one (schedule.js).
+  $("tt").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-schedule]");
+    if (b) Schedule.open({ route: b.dataset.schedule, direction: b.dataset.schDir || "inbound", station: state.ttLine ? state.station : (state.departures && state.departures.station && state.departures.station.id) || state.station });
+  });
   $("tt").addEventListener("click", (e) => {
     const b = e.target.closest(".lt-dir button");
     if (!b) return;
@@ -1076,6 +1082,7 @@
     const counts = left ? `${left} train${left === 1 ? "" : "s"} ${arriving ? "arriving" : "left"} today · last ${fmtTime(rows[rows.length - 1].time)}` : "No more trains today";
     const html = [`<div class="lt-hero" style="--line:${esc((lines[0] && lines[0].color) || "var(--accent)")}">
         <div class="lt-sub lt-sub-only">${lines.length <= 2 ? lines.map((r) => chip(r.short_name, r.color, r.text_color)).join("") + " " : ""}${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+        ${lines.length ? `<button type="button" class="lt-full" data-schedule="${esc(lines[0].id)}" data-sch-dir="${esc(dir)}">Full schedule ›</button>` : ""}
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${dir === "inbound"}">Toward downtown</button>
@@ -2003,6 +2010,14 @@
   }
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
+  Schedule.init({
+    api, esc, chip, enter, leave, reduceMotion, serverNow,
+    tz: () => state.tz,
+    routes: () => ((state.status && state.status.routes) || []).slice().sort((a, b) => String(a.short_name).localeCompare(String(b.short_name))),
+    station: () => state.station,
+    homeStation: () => state.home && state.home.home_station,
+    workStation: () => state.home && state.home.work_station,
+  });
   CTA.init({
     api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
     boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),

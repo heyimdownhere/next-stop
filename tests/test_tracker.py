@@ -894,3 +894,31 @@ def test_trip_detail_lists_every_stop_and_position(tracker):
     assert not done["running"] and all(s["passed"] for s in done["stops"])
     with pytest.raises(KeyError):
         tracker.trip_detail("nope", now=NOW)
+
+
+def test_line_schedule_is_the_whole_printed_timetable(tracker):
+    # Monday: the weekday timetable is today's; Saturday's is the coming Saturday's.
+    wk = tracker.line_schedule("L1", "inbound", "weekday", now=NOW)
+    assert wk["date"] == "2026-11-09" and wk["today"] and [s["name"] for s in wk["stations"]] == ["Alpha", "Bravo", "Central"]
+    assert [t["trip_id"] for t in wk["trains"]] == ["t-0800", "t-0830"]
+    assert wk["trains"][1]["times"] == [8 * 3600 + 1800, 8 * 3600 + 2400, 9 * 3600 + 600]
+    sat = tracker.line_schedule("L1", "inbound", "saturday", now=NOW)
+    assert sat["date"] == "2026-11-14" and not sat["today"]
+    # No Saturday train calls at Bravo, so it isn't listed.
+    assert [s["name"] for s in sat["stations"]] == ["Alpha", "Central"] and [t["times"] for t in sat["trains"]] == [[8 * 3600, 8 * 3600 + 2400]]
+    assert tracker.line_schedule("L1", "outbound", "weekday", now=NOW)["trains"] == []
+    # Thanksgiving (no weekday service that day) when that's the next weekday.
+    thu = datetime(2026, 11, 26, 9, 0, tzinfo=TZ).timestamp()
+    assert tracker.line_schedule("L1", "inbound", "weekday", now=thu)["trains"] == []
+    with pytest.raises(KeyError):
+        tracker.line_schedule("NOPE", "inbound")
+    with pytest.raises(ValueError):
+        tracker.line_schedule("L1", "inbound", "holiday")
+
+
+def test_schedule_endpoint(tracker, tmp_path, monkeypatch):
+    _, c = _app_with_fixture(tracker, tmp_path, monkeypatch)
+    assert c.get("/api/schedule?route=L1&direction=inbound").status_code == 200
+    assert c.get("/api/schedule?route=L1&direction=sideways").status_code == 400
+    assert c.get("/api/schedule?route=L1&direction=inbound&day=holiday").status_code == 400
+    assert c.get("/api/schedule?route=NOPE&direction=inbound").status_code == 404

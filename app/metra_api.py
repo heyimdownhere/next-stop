@@ -230,6 +230,24 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         except KeyError as exc:
             raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
 
+    @r.get("/schedule")
+    def schedule(
+        route: str = Query(..., min_length=1),
+        direction: str = Query(..., description="inbound (to Chicago) or outbound"),
+        day: str = Query("weekday", description="weekday, saturday or sunday"),
+    ):
+        """A line's whole timetable for one direction and kind of day, like the printed one."""
+        need_schedule()
+        d = direction_or_400(direction)
+        if d is None:
+            raise HTTPException(400, "direction is required")
+        try:
+            return _json(tracker.line_schedule(route, d, day))
+        except KeyError as exc:
+            raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
+        except ValueError:
+            raise HTTPException(400, "day must be weekday, saturday or sunday")
+
     @r.get("/trip")
     def trip(trip_id: str = Query(..., min_length=1)):
         """One train's every stop with scheduled and expected times, and where it is if running."""
