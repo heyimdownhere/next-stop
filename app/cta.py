@@ -28,7 +28,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 
 from .cta_history import MAX_GAP, CtaHistory
 from .cta_live import (  # noqa: F401  (re-exported: the API and tests import these from here)

@@ -14,7 +14,7 @@ import time
 from datetime import date
 from typing import Any, Callable
 
-import httpx
+import httpx2 as httpx
 
 from . import realtime as rtp
 from .config import Settings

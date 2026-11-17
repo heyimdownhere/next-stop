@@ -61,7 +61,7 @@ Over the first days and weeks:
 - [ ] **Wall-display mode** (`/?kiosk`): only the current commute board in large type, for a tablet by the door.
 - [ ] A small history page with charts (per-train on-time trend, worst days).
 - [ ] Store train positions in history too (currently predictions, cancellations and alerts only).
-- [ ] Update GitHub Actions versions to clear the "Node.js 20 is deprecated" warning.
+- [x] Update GitHub Actions versions to clear the "Node.js 20 is deprecated" warning.
 - [ ] Run the container as a non-root user (Unraid's 99:100).
 - [ ] Shrink old history: full detail for 90 days, then daily summaries (about 1 GB/year → tens of MB).
 
