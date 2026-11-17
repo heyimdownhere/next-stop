@@ -129,6 +129,18 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
         except TrainTrackerError as exc:
             raise HTTPException(503, f"Train Tracker unavailable: {exc}")
 
+    @r.get("/planned")
+    async def planned(key: str = Query(..., min_length=3, max_length=60, description="Group key, e.g. Brn:5"),
+                      station: str = Query(..., min_length=1, max_length=10, description="A station it calls at"),
+                      t: float = Query(..., description="When it's there (Unix time)"),
+                      sign: str | None = Query(None, max_length=60, description="Its destination sign")):
+        """A scheduled train's stops and times (from the schedule), for trains that aren't running yet."""
+        need_schedule()
+        try:
+            return _json(cta.planned(key, station, t, sign))
+        except KeyError:
+            raise HTTPException(404, "No scheduled CTA train like that")
+
     @r.get("/alerts")
     async def alerts():
         """CTA alerts for L lines and stations (bus-only alerts left out)."""

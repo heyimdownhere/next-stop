@@ -42,6 +42,11 @@
     return `<div class="cta-hist" title="${esc(title)}">${parts.join(" · ")}</div>`;
   }
   const tripId = (run) => `cta:${run}`;
+  // A scheduled train that isn't running yet (no run number): which group, a station it
+  // calls at, when, and its sign. Its sheet comes from the schedule (/api/cta/planned).
+  const plannedId = (key, station, time, sign) => (key && station && time
+    ? `ctap:${new URLSearchParams({ key, station, t: String(Math.round(time)), ...(sign ? { sign } : {}) })}` : null);
+  const plannedAttr = (id) => (id ? ` data-trip="${esc(id)}" tabindex="0" role="button"` : "");
 
   // CTA names stations like "Belmont (Red/Brown/Purple)". Show "Belmont" with
   // coloured dots for its lines instead; keep any words that aren't line names
@@ -360,7 +365,7 @@
       for (const t of later) {
         const m = Math.round((t.origin_time - now) / 60);
         const from = t.origin === "Loop" ? "Loop" : nameOf(t.origin_id, t.origin);
-        html.push(`<li class="lt-row">
+        html.push(`<li class="lt-row"${plannedAttr(plannedId(t.key, t.origin_id, t.origin_time, t.destination))}>
           <span class="lt-time">${host.bigTime(t.origin_time)}</span>
           <span class="lt-main"><span>${esc(t.destination || "")} <span class="muted small">from ${esc(from)}</span></span>
             <span class="muted small">${t.dest_time ? `arrives <b>${esc(host.fmtTime(t.dest_time))}</b>` : ""}</span></span>
@@ -423,7 +428,8 @@
         const status = r.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
           : r.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : "";
         const arr = r.final_arrival ? `arrives <b>${esc(host.fmtTime(r.final_arrival))}</b>` : "";
-        const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"` : "";
+        const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"`
+          : plannedAttr(plannedId(r.key, st.station, r.time, r.destination));
         html.push(`<li class="lt-row${r === next ? " next" : ""}${r.run && sel === tripId(r.run) ? " selected" : ""}"${trip}>
           <span class="lt-time">${host.bigTime(r.time)}</span>
           <span class="lt-main"><span>${many ? host.chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.run ? ` <span class="muted small">#${esc(r.run)}</span>` : ""}</span>
@@ -597,8 +603,17 @@
     host.mapView.setPlaces({ home: pick(st.profile.home_station), work: pick(st.profile.work_station), current: pick(st.station) });
   }
 
-  // ---------- train sheet (double-tap): CTA's follow data in the sheet's shape ----------
+  // ---------- train sheet (tap a train): CTA's follow data in the sheet's shape ----------
   function toTrip(d) {
+    if (d.planned) {
+      const now = host.serverNow();
+      const stops = d.stops.map((s) => ({ station_id: s.station_id, name: nameOf(s.station_id, s.name), time: s.time, scheduled: null, passed: s.time < now }));
+      return {
+        trip_id: null, train: null, route_short: d.route_short, color: d.color, text_color: d.text_color,
+        destination: d.destination, stops, next_index: null, running: false, live: false, delay: null, cta: true,
+        status_html: '<span class="muted">Scheduled</span>',
+      };
+    }
     const passed = (d.passed || []).map((s) => ({ station_id: s.station_id, name: nameOf(s.station_id, s.name), time: s.time, scheduled: null, passed: true }));
     const ahead = d.stops.map((s) => ({ station_id: s.station_id, name: nameOf(s.station_id, s.name), time: s.time, scheduled: null }));
     const delays = d.delays_today || [];
@@ -611,14 +626,16 @@
       source_note: passed.some((s) => s.source === "estimated") ? "From CTA Train Tracker · earlier stops estimated" : "From CTA Train Tracker",
     };
   }
-  const tripPath = (id) => `/api/cta/follow?run=${encodeURIComponent(id.slice(4))}`;
+  const tripPath = (id) => (id.startsWith("ctap:") ? `/api/cta/planned?${id.slice(5)}`
+    : `/api/cta/follow?run=${encodeURIComponent(id.slice(4))}`);
+  const isTrip = (id) => id.startsWith("cta:") || id.startsWith("ctap:");
 
   function popup(t) {
     const rows = [["Run", `#${esc(t.run)}`], ["To", esc(t.destination || "—")], ["Next", t.next_station_id && st.byId.has(t.next_station_id) ? stationHtml(st.byId.get(t.next_station_id)) : esc(t.next_station || "—")],
       ["Status", t.delayed ? '<span class="badge cancel">Delayed</span>' : t.due ? "Arriving" : "Live"]];
     const row = st.board && st.board.groups.flatMap((g) => g.trains).find((x) => x.run === t.run);
     const foot = row ? `<div class="popup-board"><span>At ${esc(nameOf(st.board.station.id))} <b>${esc(host.fmtTime(row.time))}</b></span></div>` : "";
-    return `<div class="popup"><h3>${chipFor(t.route_id)} ${esc(lineOf(t.route_id).name || "")}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${foot}<p class="muted small">Double-tap for every stop</p></div>`;
+    return `<div class="popup"><h3>${chipFor(t.route_id)} ${esc(lineOf(t.route_id).name || "")}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${foot}<p class="muted small">Tap the train for every stop</p></div>`;
   }
 
   // The map's corner credit names whose data is on it.
@@ -682,7 +699,7 @@
       const on = b.dataset.sys === "cta";
       if (on !== st.active) setActive(on);
     }));
-    // One tap on a CTA train: show it on the map (two taps open its stops; app.js handles that).
+    // A tap on a CTA train: pick it out on the map (app.js also opens its stops).
     $("board-list").addEventListener("click", (e) => {
       if (!st.active) return;
       const b = e.target.closest("[data-trip]");
@@ -703,7 +720,7 @@
     stations: () => st.stations,
     myLines: () => new Set([st.station, st.dest, st.profile.home_station, st.profile.work_station]
       .map((id) => st.byId.get(id)).filter(Boolean).flatMap((s) => s.routes)),
-    selectStation, clear, swap, goTrip, popup, toTrip, tripPath,
+    selectStation, clear, swap, goTrip, popup, toTrip, tripPath, isTrip,
     renderTtHead, setTtLine, suggest, stationName, saveCommute,
     // Keep the last board and timetable (both are cleared when the station changes),
     // so the new tab draws at once instead of flashing empty while it refreshes.

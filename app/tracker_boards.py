@@ -4,6 +4,7 @@ and the plain JSON for Home Assistant."""
 from __future__ import annotations
 
 import logging
+import re
 import time
 from bisect import bisect_left
 from datetime import date, datetime, timedelta
@@ -531,6 +532,61 @@ class BoardQueries(MapQueries):
             "data_as_of": self.data_as_of("tripupdates"),
             "generated_at": now,
         }
+
+    def line_schedule(self, route: str, direction: str, day: str = "weekday", now: float | None = None) -> dict:
+        """A line's whole printed timetable for one direction and kind of day, like
+        Metra's PDF: the stations in order, and every train with its time at each.
+
+        `day` is weekday, saturday or sunday: the next date of that kind (today when
+        it is one) decides which services run, so schedule changes and holidays count."""
+        s = self.static
+        now = time.time() if now is None else now
+        if not s or route not in s.routes:
+            raise KeyError(route)
+        if day not in ("weekday", "saturday", "sunday"):
+            raise ValueError(day)
+        today = s.local_date(now - 3 * 3600)  # until 3 AM it's still yesterday's service day
+        want = {"weekday": range(5), "saturday": (5,), "sunday": (6,)}[day]
+        d = next(today + timedelta(days=i) for i in range(7) if (today + timedelta(days=i)).weekday() in want)
+        services = s.active_services(d)
+        runs = []
+        for trip_id, trip in s.trips.items():
+            if trip[T_ROUTE] != route or trip[T_SERVICE] not in services:
+                continue
+            sts = s.trip_stops.get(trip_id)
+            if not sts or self._direction(sts[0][S_STOP], sts[-1][S_STOP]) != direction:
+                continue
+            runs.append((trip_id, trip, sts))
+        # Station order: the longest run, with stations only other runs serve (branches,
+        # short turns) slotted in after the station they follow.
+        order: list[str] = []
+        for _, _, sts in sorted(runs, key=lambda r: -len(r[2])):
+            prev: str | None = None
+            for x in sts:
+                stop = x[S_STOP]
+                if stop not in order:
+                    at = 0 if prev is None else order.index(prev) + 1 if prev in order else len(order)
+                    order.insert(at, stop)
+                prev = stop
+        # Sort by the time at the downtown end, as the printed timetable does.
+        ends = [r[2][-1 if direction == "inbound" else 0][S_STOP] for r in runs]
+        anchor: str = max(set(ends), key=ends.count) if ends else ""
+        trains: list[tuple[int, dict]] = []
+        for trip_id, trip, sts in runs:
+            times: dict[str, int] = {x[S_STOP]: (x[S_DEP] if x[S_DEP] is not None else x[S_ARR]) for x in sts}
+            first = sts[0][S_DEP] if sts[0][S_DEP] is not None else sts[0][S_ARR]
+            key: int = times.get(anchor, first or 0)
+            num = re.match(r"[^_]+_[A-Z]+(\d+)_", trip_id)
+            trains.append((key, {"trip_id": trip_id, "train": trip[T_SHORT_NAME] or (num.group(1) if num else None),
+                                 "times": [times.get(stop) for stop in order]}))
+        trains.sort(key=lambda t: t[0])
+        r = s.routes.get(route, {})
+        return {"route": route, "route_short": r.get("short_name", route), "route_name": r.get("long_name", route),
+                "color": r.get("color"), "text_color": r.get("text_color"), "direction": direction, "day": day,
+                "date": d.isoformat(), "service_day_start": s.service_day_start(d), "today": d == today,
+                "stations": [{"id": stop, "name": s.stop_name(stop) or stop} for stop in order],
+                "trains": [t for _, t in trains], "server_time": now,
+                "schedule_version": s.version}
 
     def line_trains(self, route: str, direction: str | None = None, now: float | None = None, limit: int = 60) -> dict:
         """Every train on one line still to run today in one direction (running ones first).

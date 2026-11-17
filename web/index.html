@@ -277,6 +277,40 @@
     </section>
   </div>
 
+  <section id="schedule-page" class="schedule-page" aria-labelledby="sch-title" hidden>
+    <div class="sch-top">
+      <button type="button" id="sch-back" class="sch-icon" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div class="sch-title">
+        <h2 id="sch-title"><span id="sch-chip"></span><label class="sch-line-pick"><span class="sr-only">Line</span><select id="sch-line"></select></label></h2>
+        <span id="sch-sub" class="muted small"></span>
+      </div>
+    </div>
+    <div class="sch-bar">
+      <div class="sch-seg" id="sch-day" role="radiogroup" aria-label="Day">
+        <label><input type="radio" name="sch-day" value="weekday"><span>Weekday</span></label>
+        <label><input type="radio" name="sch-day" value="saturday"><span>Saturday</span></label>
+        <label><input type="radio" name="sch-day" value="sunday"><span>Sunday</span></label>
+      </div>
+      <div class="sch-seg" id="sch-dir" role="radiogroup" aria-label="Direction">
+        <label><input type="radio" name="sch-dir" value="inbound"><span>To Chicago</span></label>
+        <label><input type="radio" name="sch-dir" value="outbound"><span>From Chicago</span></label>
+      </div>
+      <div class="sch-jump" role="group" aria-label="Jump to a time at a station">
+        <label class="sch-field sch-time"><span>Time</span><input type="time" id="sch-time" step="60"></label>
+        <label class="sch-field sch-stn"><span>Station</span><select id="sch-station"></select></label>
+        <button type="button" id="sch-now" class="sch-now" hidden>Now</button>
+      </div>
+    </div>
+    <div class="sch-legend">
+      <span class="sch-key-next">Next train</span><span class="sch-key-target">Your time</span><span><b>↓</b> doesn’t stop</span><span><b>PM</b> in bold</span>
+      <span id="sch-jump-note" class="sch-jump-note"></span>
+    </div>
+    <p id="sch-note" class="muted sch-note"></p>
+    <div class="sch-scroll" id="sch-scroll"><table class="sch-grid" id="sch-grid"></table></div>
+  </section>
+
   <section id="settings-page" class="settings-page" aria-labelledby="settings-title" hidden>
     <div class="settings-inner">
     <div class="settings-head">
@@ -371,6 +405,7 @@
   <script src="vendor/protomaps/basemaps.js"></script>
   <script src="map.js"></script>
   <script src="cta.js"></script>
+  <script src="schedule.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

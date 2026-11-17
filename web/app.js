@@ -305,17 +305,12 @@
     return hit;
   }
   const narrow = () => matchMedia("(max-width: 820px)").matches;
-  // Scrolling after a tap waits for the double-tap window (a double-tap opens the train's stops).
-  function deferScroll(fn) { clearTimeout(deferScroll.t); deferScroll.t = setTimeout(fn, 330); }
+  // A tap on a train on the board: it's picked out on the map too (the tap also opens
+  // its stops, see "Tap any train" below).
   function pickBoardTrain(li) {
     if (mapHidden()) return;
     const trip = li.dataset.trip;
-    if (state.selectedTrip === trip) {  // tap again to unselect
-      state.selectedTrip = null;
-      mapView.clearSelection(false);
-      markBoardSelection(false);
-      return;
-    }
+    if (state.selectedTrip === trip) return;
     state.selectedTrip = trip;
     markBoardSelection(false);
     const onMap = mapView.selectTrip(trip, li.dataset.route);
@@ -324,9 +319,6 @@
       note.textContent = "That train isn't running yet; its line is highlighted";
       note.hidden = false;
     }
-    // On phones the map is below the board: bring it into view (after a beat, so a
-    // second tap can still land on the same row and open its stops instead).
-    if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
   }
   $("board-list").addEventListener("click", (e) => {
     if (CTA.active() || e.target.closest("a, button")) return;
@@ -1001,6 +993,7 @@
     const html = [`<div class="lt-hero" style="--line:${esc(d.color || "")}">
         <div class="lt-name">${chip(d.route_short, d.color, d.text_color)}<b>${esc(d.route_name)}</b></div>
         <div class="lt-sub">${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+        <button type="button" class="lt-full" data-schedule="${esc(d.route)}" data-sch-dir="${esc(d.direction)}">Full schedule ›</button>
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${d.direction === "inbound"}">Toward downtown</button>
@@ -1040,7 +1033,7 @@
       html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
       for (const t of later) {
         const m = Math.round((t.origin_time - now) / 60);
-        html.push(`<li class="lt-row${t.cancelled ? " cancelled" : ""}">
+        html.push(`<li class="lt-row${t.cancelled ? " cancelled" : ""}"${t.trip_id ? ` data-trip="${esc(t.trip_id)}" tabindex="0" role="button"` : ""}>
           <span class="lt-time">${bigTime(t.origin_time)}</span>
           <span class="lt-main"><span>${esc(t.destination || "")}${t.train ? ` <span class="muted small">#${esc(t.train)}</span>` : ""}</span>
             <span class="muted small">arrives ${timeChange(t.dest_time_scheduled, t.dest_time)}${t.cancelled || t.live ? ` · ${status(t)}` : ""}</span></span>
@@ -1051,6 +1044,11 @@
     }
     $("tt").innerHTML = html.join("");
   }
+  // "Full schedule": the line's whole timetable, like the printed one (schedule.js).
+  $("tt").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-schedule]");
+    if (b) Schedule.open({ route: b.dataset.schedule, direction: b.dataset.schDir || "inbound", station: state.ttLine ? state.station : (state.departures && state.departures.station && state.departures.station.id) || state.station });
+  });
   $("tt").addEventListener("click", (e) => {
     const b = e.target.closest(".lt-dir button");
     if (!b) return;
@@ -1084,6 +1082,7 @@
     const counts = left ? `${left} train${left === 1 ? "" : "s"} ${arriving ? "arriving" : "left"} today · last ${fmtTime(rows[rows.length - 1].time)}` : "No more trains today";
     const html = [`<div class="lt-hero" style="--line:${esc((lines[0] && lines[0].color) || "var(--accent)")}">
         <div class="lt-sub lt-sub-only">${lines.length <= 2 ? lines.map((r) => chip(r.short_name, r.color, r.text_color)).join("") + " " : ""}${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+        ${lines.length ? `<button type="button" class="lt-full" data-schedule="${esc(lines[0].id)}" data-sch-dir="${esc(dir)}">Full schedule ›</button>` : ""}
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${dir === "inbound"}">Toward downtown</button>
@@ -1240,7 +1239,7 @@
       groups.get(key).push(r);
     }
     const dirLabel = { inbound: "Toward downtown", outbound: "Away from downtown" };
-    // Tap: show the train on the map (tap again to let go); double-tap: its stops. As on CTA.
+    // Tap: the train's stops, and the train picked out on the map. As on CTA.
     const pickAttrs = (r) => (r.trip_id
       ? ` data-trip="${esc(r.trip_id)}" data-route="${esc(r.route_id || "")}" title="Show this train on the map"` : "");
     const selTrip = state.selectedTrip;
@@ -1276,10 +1275,9 @@
     const b = e.target.closest(".lc [data-trip]");
     if (b) pickTrain(b.dataset.trip, b.dataset.route);
   });
-  // One tap on a train on the board (Metra or CTA): show it on the map; again to let go.
+  // A tap on a train on the board (Metra or CTA): pick it out on the map.
   function pickTrain(trip, route) {
-    if (mapHidden()) return;
-    if (state.selectedTrip === trip) { state.selectedTrip = null; mapView.clearSelection(false); renderBoard(); return; }
+    if (mapHidden() || state.selectedTrip === trip) return;
     state.selectedTrip = trip;
     if (!mapView.selectTrip(trip, route)) {
       const note = $("map-note");
@@ -1287,10 +1285,9 @@
       note.hidden = false;
     }
     renderBoard();
-    if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
   }
 
-  // ---------- train detail sheet (double-tap any train) ----------
+  // ---------- train detail sheet (tap any train) ----------
   // Opens half-height: a summary and the timeline around the train; drag up for every stop.
   // follow: keep the train in view as it moves down the list, until you scroll the list yourself.
   const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false, follow: true };
@@ -1308,7 +1305,6 @@
   }
   async function openTrip(tripId) {
     if (!tripId) return;
-    clearTimeout(deferScroll.t);  // a double-tap: stay where you are
     sheet.trip = tripId;
     sheet.firstRender = true;
     sheet.follow = true;
@@ -1331,7 +1327,7 @@
     const id = sheet.trip;
     if (!id) return;
     let d;
-    const cta = id.startsWith("cta:");
+    const cta = CTA.isTrip(id);
     try { d = await api(cta ? CTA.tripPath(id) : `/api/trip?trip_id=${encodeURIComponent(id)}`); if (cta) d = CTA.toTrip(d); } catch (e) {
       if (sheet.firstRender) $("ts-head").innerHTML = '<p class="muted">Couldn\'t load this train.</p>';
       return;
@@ -1463,44 +1459,24 @@
     window.addEventListener("resize", () => { if (sheet.trip) setSheetMode(sheet.mode, { animate: false }); });
   })();
 
-  // Double-tap (or double-click) any train: on the board, the timetable or the map.
-  // Detected from pointer events (a map swallows the second tap's click for its own zoom).
-  (() => {
-    let last = { trip: null, t: 0, x: 0, y: 0 };
-    let swallowUntil = 0;
-    const tripOf = (el) => {
-      const x = el && el.closest && el.closest("[data-trip]");
-      if (!x || x.closest("#trip-sheet")) return null;
-      return x.dataset.trip || null;
-    };
-    document.addEventListener("pointerup", (e) => {
-      const trip = tripOf(e.target);
-      if (!trip) { last.trip = null; return; }
-      // When the finger lifted, not when this runs: the first tap's work (map pop-up,
-      // flying the map, redrawing) can hold the second tap's event back on a slow phone.
-      const t = e.timeStamp || performance.now();
-      if (last.trip === trip && t - last.t < 400 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
-        last.trip = null;
-        swallowUntil = t + 450;  // the click (if any) that follows only opens the sheet
-        e.stopPropagation();
-        openTrip(trip);
-        return;
-      }
-      last = { trip, t, x: e.clientX, y: e.clientY };
-    }, true);
-    // A second quick tap on a map train: don't let the map zoom on it.
-    for (const type of ["touchstart", "touchend", "dblclick"]) {
-      document.addEventListener(type, (e) => {
-        const onTrain = e.target.closest && e.target.closest(".train-marker");
-        if (onTrain && last.trip && (e.timeStamp || performance.now()) - last.t < 400) e.stopPropagation();
-        if (type === "dblclick" && tripOf(e.target)) { e.stopPropagation(); e.preventDefault(); }
-      }, { capture: true, passive: type !== "dblclick" });
-    }
-    document.addEventListener("click", (e) => {
-      // The rest of the double-tap (it can land on the sheet that just opened under the finger).
-      if ((e.timeStamp || performance.now()) < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
-    }, true);
-  })();
+  // Tap any train: on the board, the timetable (running or not yet) or the map: its stops.
+  const tripOf = (el) => {
+    const x = el && el.closest && el.closest("[data-trip]");
+    if (!x || x.closest("#trip-sheet")) return null;
+    return x.dataset.trip || null;
+  };
+  document.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest("[data-line-view], .lt-dir, a")) return;
+    const trip = tripOf(e.target);
+    if (trip) openTrip(trip);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const x = e.target.closest && e.target.closest(".dep[data-trip], .lt-row[data-trip], .lt-card[data-trip]");
+    if (!x || x.closest("#trip-sheet")) return;
+    e.preventDefault();
+    openTrip(x.dataset.trip);
+  });
 
   // ---------- display options (this device only) ----------
   const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest", count: "5" };
@@ -2034,6 +2010,14 @@
   }
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
+  Schedule.init({
+    api, esc, chip, enter, leave, reduceMotion, serverNow,
+    tz: () => state.tz,
+    routes: () => ((state.status && state.status.routes) || []).slice().sort((a, b) => String(a.short_name).localeCompare(String(b.short_name))),
+    station: () => state.station,
+    homeStation: () => state.home && state.home.home_station,
+    workStation: () => state.home && state.home.work_station,
+  });
   CTA.init({
     api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
     boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),
