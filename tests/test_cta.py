@@ -530,3 +530,24 @@ def test_line_page_api(api):
     c, _ = api
     assert c.get("/api/cta/line?route=Brn").json()["directions"][0]["label"] == "Toward downtown"
     assert c.get("/api/cta/line?route=Nope").status_code == 404
+
+
+def test_planned_train_has_its_stops_from_the_schedule(recorder):
+    # A train still to start (no run number yet): tapping it shows its stops and times.
+    t = recorder
+    body = {"ctatt": {"errCd": "0", **_pos()}}
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)))
+    d = run(t.line("Brn", "inbound", now=_at(7, 0)))
+    [row] = d["trains"]
+    p = t.planned(row["key"], row["origin_id"], row["origin_time"], row["destination"])
+    assert p["planned"] and p["route_id"] == "Brn" and p["destination"] == "Loop"
+    assert p["stops"][0]["station_id"] == row["origin_id"] and p["stops"][0]["time"] == _at(7, 30)
+    times = [s["time"] for s in p["stops"]]
+    assert len(times) > 1 and times == sorted(times)
+    with pytest.raises(KeyError):
+        t.planned("Brn:nope", row["origin_id"], row["origin_time"])
+
+
+def test_planned_api(api):
+    c, _ = api
+    assert c.get("/api/cta/planned?key=Brn:nope&station=1&t=0").status_code == 404

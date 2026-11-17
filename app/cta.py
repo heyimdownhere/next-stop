@@ -698,7 +698,7 @@ class CtaTracker:
                         ends = self._end_minutes(origin, gk)
                         mins = ends.get(sign)
                         later.append({
-                            "trip_id": None, "train": None, "running": False,
+                            "trip_id": None, "train": None, "running": False, "key": gk,
                             "origin": self._origin_label(route, origin), "origin_id": origin, "origin_time": t0,
                             "destination": sign, "dest_time": t0 + mins * 60 if mins is not None else None,
                             "dest_time_scheduled": t0 + mins * 60 if mins is not None else None,
@@ -777,6 +777,33 @@ class CtaTracker:
                 "delays_today": [{"station_id": d["station"], "name": d["station_name"], "started": d["started"],
                                   "minutes": round((d["ended"] - d["started"]) / 60)} for d in delays_today],
                 "as_of": parse_cta_time(body.get("tmst")), "credit": CREDIT}
+
+    def planned(self, key: str, station: str, at: float, sign: str | None = None) -> dict:
+        """A scheduled train that isn't running yet (or isn't tracked): its stops and
+        times from the schedule's typical run times, given the group, one station it
+        calls at and when. Train Tracker only knows trains that are running now."""
+        sch = self._need_schedule()
+        seqs = [q for q in sch.sequences.get(key, []) if station in q]
+        if not seqs:
+            raise KeyError(key)
+        seq = max(seqs, key=len)
+        origin = seq[0]
+        offs = {origin: 0, **sch.reach.get((origin, key), {})}
+        if station not in offs:
+            raise KeyError(station)
+        start = at - offs[station] * 60
+        end = self._end_minutes(origin, key).get(sign) if sign else None
+        stops = []
+        for sid in seq:
+            m = offs.get(sid)
+            if m is None or sid not in sch.stations:
+                continue
+            if end is not None and m > end:
+                break
+            stops.append({"station_id": sid, "name": sch.stations[sid]["name"], "time": start + m * 60})
+        rid = key.split(":", 1)[0]
+        return {"system": "cta", **self._line_info(rid), "key": key, "planned": True,
+                "destination": sign or (stops[-1]["name"] if stops else None), "stops": stops, "credit": CREDIT}
 
     async def _check_running(self, run: str) -> None:
         """Raise KeyError if the latest positions list trains and this run isn't
