@@ -1017,39 +1017,42 @@ body.schedule-open .layout, body.schedule-open .topbar, body.schedule-open #aler
 .sch-scroll { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--border); overscroll-behavior: contain; }
 /* The grid, like the printed timetable: lines between the trains, striped rows, AM / PM
    under each train number, a heavy line where AM turns to PM, and every time marked a or p. */
-.sch-grid { --rule: color-mix(in srgb, var(--border) 75%, transparent); --stripe: color-mix(in srgb, var(--text) 5%, transparent);
+.sch-grid { --rule: color-mix(in srgb, var(--border) 55%, transparent); --heavy: color-mix(in srgb, var(--muted) 70%, transparent); --stripe: color-mix(in srgb, var(--text) 5%, transparent);
   border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
 .sch-grid th, .sch-grid td { height: 30px; padding: 0 6px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-.sch-grid .sn { position: sticky; left: 0; z-index: 1; background: var(--panel); text-align: left; padding: 0; width: 118px; min-width: 118px; max-width: 118px; border-right: 2px solid var(--text); }
+.sch-grid .sn { position: sticky; left: 0; z-index: 1; background: var(--panel); text-align: left; padding: 0; width: 118px; min-width: 118px; max-width: 118px; border-right: 1px solid var(--heavy); }
 .sch-grid .sn-pick { width: 100%; height: 30px; padding: 0 6px; background: none; border: 0; color: inherit; font: inherit; font-size: 13px; font-weight: 500; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .sch-grid .sn-pick:hover { color: var(--accent); }
 .sch-grid .r.z .sn { background: color-mix(in srgb, var(--text) 5%, var(--panel)); }
 .sch-grid .r.z td { background: var(--stripe); }
 .sch-grid .r.end .sn-pick { font-weight: 700; }
-.sch-grid .r.home .sn { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); box-shadow: inset 3px 0 0 var(--accent); }
-.sch-grid .r.home .sn-pick { font-weight: 700; }
-.sch-grid .r.home td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.sch-grid .r.home .sn { background: var(--accent); }
+.sch-grid .r.home .sn-pick { font-weight: 800; color: #04121f; }  /* dark on the bright dark-theme blue */
+[data-theme="light"] .sch-grid .r.home .sn-pick { color: #fff; }
+.sch-grid .r.home td { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); font-weight: 700; }
+.sch-grid .r.home th, .sch-grid .r.home td { border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
+.sch-grid .r.home .c.gone { color: var(--text); opacity: .6; }
 .sch-grid .c { text-align: center; font-size: 13px; min-width: 56px; border-left: 1px solid var(--rule); }
 .sch-grid .c.pm { font-weight: 700; }
 .sch-grid .ap { font-size: 9px; font-weight: 700; margin-left: 1px; color: var(--muted); vertical-align: 1px; }
 .sch-grid .c.pm .ap, .sch-key-p { color: var(--minor); }
 .sch-grid .c.gone { color: var(--muted); opacity: .75; }
 .sch-grid .c.next { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.sch-grid .turn { border-left: 3px solid var(--text) !important; }
+.sch-grid .turn { border-left: 2px solid var(--heavy) !important; }
 .sch-grid td.target { box-shadow: inset 0 0 0 2px var(--minor); border-radius: 6px; font-weight: 800; }
 .sch-grid .h { position: sticky; top: 0; z-index: 1; background: var(--panel-2); padding: 0; text-align: center; min-width: 56px; border-left: 1px solid var(--rule); border-bottom: 0; }
 .sch-grid .h.num { height: 30px; }
 .sch-grid .h.num button { width: 100%; height: 30px; padding: 4px 6px 0; background: none; border: 0; color: var(--text); font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
-.sch-grid .h.sub { top: 30px; height: 22px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid var(--text); }
+.sch-grid .h.sub { top: 30px; height: 22px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--heavy); }
 .sch-grid .h.sub .xp { margin-left: 4px; color: var(--minor); }
 .sch-grid .h.gone button { color: var(--muted); }
 .sch-grid .h.next { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); }
 .sch-grid .h.num.next { box-shadow: inset 0 3px 0 var(--accent); }
 .sch-grid .h.sub.next { color: var(--accent); }
 .sch-grid .h.sub.focus { box-shadow: inset 0 -3px 0 var(--minor); }
-.sch-grid .corner { position: sticky; left: 0; top: 0; z-index: 2; background: var(--panel-2); text-align: left; padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-right: 2px solid var(--text); }
+.sch-grid .corner { position: sticky; left: 0; top: 0; z-index: 2; background: var(--panel-2); text-align: left; padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-right: 1px solid var(--heavy); }
 .sch-grid .corner.num { height: 30px; border-bottom: 0; }
-.sch-grid .corner.sub { top: 30px; height: 22px; border-bottom: 2px solid var(--text); }
+.sch-grid .corner.sub { top: 30px; height: 22px; border-bottom: 1px solid var(--heavy); }
 @media (min-width: 821px) { .sch-bar { flex-direction: row; flex-wrap: wrap; } .sch-bar > * { flex: 1 1 260px; } .sch-grid .sn { width: 170px; min-width: 170px; max-width: 170px; } }
 .lt-full { margin-top: 8px; min-height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .lt-full:hover { border-color: var(--accent); }
