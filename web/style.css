@@ -105,7 +105,8 @@ button { font: inherit; color: inherit; }
 .map-wrap { position: relative; min-height: 0; }
 #map { position: absolute; inset: 0; background: var(--bg); }
 .map-note {
-  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 500;
+  /* Centred without a transform, so the enter animation's transform can't shift it sideways. */
+  position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; max-width: calc(100% - 20px); bottom: 28px; z-index: 500;
   background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
   padding: 6px 14px; font-size: 12px; color: var(--muted); box-shadow: var(--shadow); white-space: nowrap;
 }
@@ -563,7 +564,7 @@ body.map-only .tabs { margin-bottom: 10px; }
 body.map-only .map-wrap { flex: 1; height: auto; min-height: 0; }
 @media (min-width: 821px) { body.map-only .tabs { width: 400px; } }
 .map-clear {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 500; max-width: calc(100% - 140px);
+  position: absolute; top: 12px; left: 0; right: 0; margin: 0 auto; width: fit-content; z-index: 500; max-width: calc(100% - 140px);
   padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text);
   font: inherit; font-size: 13px; box-shadow: var(--shadow); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

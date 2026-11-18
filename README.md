@@ -1,61 +1,158 @@
-# Next Stop
+<p align="center">
+  <img src="web/icon-192.png" width="96" alt="Next Stop icon">
+</p>
 
-A Chicago commuter-rail tracker that's quick to read and light on phone data. Uses Metra's public schedule and realtime data; not sponsored, affiliated, or operated by Metra.
+<h1 align="center">Next Stop</h1>
 
-A self-hosted web app that shows live Metra trains. It runs in Docker on a home server (an Unraid template is included) and you open it in a browser on any phone, tablet or computer on your network: `http://<your-server-ip>:8080`.
+<p align="center">
+  <b>Live Chicago trains (Metra and the CTA 'L') on a fast, phone-friendly board and map that you host yourself.</b><br>
+  <sub>Uses Metra's and CTA's public data. Not sponsored, affiliated, or operated by Metra or CTA.</sub>
+</p>
 
-| Desktop | Phone |
-|---|---|
-| ![Desktop, dark mode](docs/screenshot-desktop.png) | ![Phone, dark mode](docs/screenshot-mobile.png) |
+<p align="center">
+  <a href="#install-on-unraid">Install</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#home-assistant-morning-train-notification">Home Assistant</a> ·
+  <a href="#api">API</a>
+</p>
 
-*Screenshots use the "Simple" map background. With the self-hosted map downloaded, a street map sits under the lines.*
+Next Stop is a self-hosted web app. It runs in Docker on a home server (an Unraid template is included), and you open it in a browser on any phone, tablet or computer on your network at `http://<your-server-ip>:8080`. Add it to your home screen and it works like an app.
+
+## See it in action
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/media/demo-metra.gif" width="300" alt="Metra walkthrough: the board, a train's stops, the map, a line and its timetable"><br>
+      <b>Metra</b>: board → a train's stops → map → one line → its timetable<br>
+      <sub><a href="docs/media/demo-metra.mp4">MP4</a></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/media/demo-cta.gif" width="300" alt="CTA walkthrough: Clark/Lake arrivals and the L map"><br>
+      <b>CTA 'L'</b>: arrivals at Clark/Lake → every train on the map → the Red Line<br>
+      <sub><a href="docs/media/demo-cta.mp4">MP4</a></sub>
+    </td>
+  </tr>
+</table>
+
+## Screenshots
+
+Phone screenshots are full-screen at 1080 × 2340 (a Galaxy S25 Ultra).
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/phone-board.png" width="250" alt="Next trains board"><br><b>Next trains</b><br><sub>Live delays, reasons, minutes until</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-timetable.png" width="250" alt="Timetable tab"><br><b>Timetable</b><br><sub>Trains on the way now and the rest of today</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-train.png" width="250" alt="A train's stops"><br><b>Follow a train</b><br><sub>Where it is, every stop, live times</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/phone-map.png" width="250" alt="Map framed on the commute"><br><b>Your commute</b><br><sub>The map opens on home and work</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-map-all.png" width="250" alt="Every Metra train"><br><b>Every train</b><br><sub>Official line colors, live positions</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-line.png" width="250" alt="One line in focus"><br><b>One line</b><br><sub>Its stations and trains, one tap to its timetable</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/phone-cta.png" width="250" alt="CTA arrivals"><br><b>CTA arrivals</b><br><sub>Every line at a station, live from Train Tracker</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-cta-map.png" width="250" alt="CTA map"><br><b>The 'L' map</b><br><sub>All trains, every 30 seconds</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-settings.png" width="250" alt="Settings"><br><b>Settings</b><br><sub>Commute, theme, trains on the board</sub></td>
+  </tr>
+</table>
+
+<details>
+<summary><b>Desktop</b> (dark and light)</summary>
+
+![Desktop, dark mode](docs/screenshots/desktop-dark.png)
+![Desktop, light mode](docs/screenshots/desktop-light.png)
+
+</details>
+
+<details>
+<summary><b>Light mode on a phone</b></summary>
+
+<img src="docs/screenshots/phone-board-light.png" width="300" alt="Next trains board, light mode">
+
+</details>
 
 ## What it does
 
-- **When is my next train, and is it on time?** Pick a station. With no destination, the board shows a card per line and direction: the next train big, the following ones as small times; tap one to see every train on that line. Pick where you're going for arrival times. The board shows the next trains with how long until each leaves, and whether it's on time, late or cancelled. A late train shows the original time crossed out, the new time beside it, and the reason if Metra has posted one.
-- **What's left today?** The **Today's timetable** tab lists every train still to come from your station, grouped by hour, with live times where Metra has them.
-- **Where are the trains?** A map shows every line in its official color and the trains moving along it. Tap a train on the board to see it on the map, or tap one on the map to find it on the board. The **Map** tab shows just the map, full screen on a phone, and **Clear** goes back to showing every train.
-- **Is anything wrong on my line?** Service alerts sit behind a 🔔 bell with a badge for new ones. Alerts that mean trains won't match the timetable (extra service, line closures, trains running express) are tagged **Schedule change** and shown above the board.
-- **Home and work.** Set a home and work station once. On workdays the app opens on the trip to work in the morning and the trip home after your switch time. It's saved on the server, so every device opens the same way.
-- **Can my phone just tell me?** Home Assistant can ask the app for your commute and send a weekday-morning notification like *"7:12 AM (on time), 7:30 AM (8 min late: Weather)"*.
-- **How reliable is my train?** The app keeps a year of delay and cancellation history and shows each train's on-time record at your station.
-
-It's light on your phone's data: the server talks to Metra, and your phone only downloads small summaries from the server. It works before you have a Metra API key, using the published schedule and estimated train positions. Add the key and everything switches to live data.
+- **When's my next train, and is it on time?** Live departures with delays, the reason when Metra posts one, and minutes until it leaves.
+- **Where is it right now?** A live map of every Metra and CTA 'L' train, and a stop-by-stop view of any one train.
+- **What's left today?** The day's remaining trains from your station, plus a line's full printed-style timetable.
+- **Opens on your commute.** Set home and work once: mornings open on the trip to work, afternoons on the trip home, on every device.
+- **Tells you when something's wrong.** Service alerts behind a 🔔 bell, with timetable-changing ones flagged.
+- **Knows how reliable your train is.** A year of history gives each train an on-time record at your station.
+- **Light on your data.** Your phone only downloads small summaries from your server, never from Metra or CTA.
 
 ## Features
 
-### Departure board
-- **Next trains** (3, 5, 8, 10 or any number up to 50; set in ⚙ Settings) with time, how long until it leaves (minutes, or hours and minutes past an hour), destination, line, train number and a badge:
+### Next trains (Metra)
+
+- **The board.** The next 3, 5, 8 or 10 trains (or any number up to 50) with time, minutes until (or hours and minutes), destination, line and train number.
+- **No destination?** One card per line and direction: the next train big, the following ones small. Tap one to see every train on that line.
+- **With a "Going to" station.** Only trains that stop there, each with its arrival time and trip length. Every train also shows its estimated arrival at the end of the line.
+- **Status badges.**
   - **Live**: Metra's own prediction.
-  - **Tracking**: Metra reports the train's GPS position but sent no prediction, so the delay is estimated from where the train is compared with the timetable ("~3 min late").
-  - **Scheduled**: no live data; timetable time.
-- Delays of 1–5 min are amber and 6+ min red (Metra counts under 6 minutes as on time). Times are shown as Metra predicts them, unchanged (an early prediction shows as early). Cancelled trains are struck through. Extra trains not in the timetable are tagged **Extra train**.
-- With a **Going to** station, each train shows its arrival time there and the trip length. Every train also shows its estimated arrival at the end of the line.
-- **Delay reasons** come from an alert naming that train, or else one for its line. The alert's cause is shown (e.g. "Weather"), or its text if the cause is unknown.
-- **On-time history**: once a train has been seen on 5+ days, it shows its record at your station over the last 30 days, e.g. "90% on time · avg 3 min late". Weekday, Saturday and Sunday trains are counted separately.
-- **Station pickers**: search by station or line (e.g. "upn"). The **Going to** list only suggests stations you can reach on a direct train from your **From** station, grouped *Toward downtown* / *Away from downtown*, in line order, with ride times. Typing still finds any station.
-- The ⇅ button next to the board title flips the direction. Tap a station name in the title to show it on the map.
+  - **Tracking**: Metra reports the train's GPS position but no prediction, so the delay is worked out from where the train is ("~3 min late").
+  - **Scheduled**: no live data, so this is the timetable time.
+- **Delays at a glance.** 1–5 min late is amber and 6+ min is red (Metra counts under 6 minutes as on time). A late train shows the original time crossed out and the new time beside it. Cancelled trains are struck through, and trains not in the timetable are tagged **Extra train**. Times are shown exactly as Metra predicts them.
+- **Delay reasons.** Taken from an alert naming the train, or else one for its line: the cause (e.g. "Weather"), or the alert's text if the cause is unknown.
+- **On-time history.** Once a train has been seen on 5+ days: "90% on time · avg 3 min late" at your station over the last 30 days, with weekdays, Saturdays and Sundays counted separately.
+- **Station pickers.** Search by station or line (e.g. "upn"). **Going to** only suggests stations you can reach on a direct train, grouped *Toward downtown* / *Away from downtown*, in line order, with ride times. Typing still finds any station.
+- **Quick actions.** ⇅ flips the trip. **Home** / **Work** jump to either board. Tap a station name in the title to show it on the map. The From/Going-to boxes can be hidden to give the board more room.
+
+### Timetable and full schedule
+
+- **Timetable tab.** *On the way now* shows the trains already running toward your station, with a progress bar and the next stop. *Later today* lists every train still to come until the end of Metra's service day, with live times where available.
+- **One line's timetable.** Tap a line chip at the top of the Timetable tab to see that whole line, toward or away from downtown (picked by time of day).
+- **Full schedule.** A line's complete timetable laid out like Metra's printed one: stations down the side, trains across the top, with the station names fixed while you swipe. Choose weekday, Saturday or Sunday and the direction, then jump to a station and time. Tap a station to make it the one at the top.
+
+### Follow a train
+
+- Tap any train on the board or the map to open its sheet: next stop, minutes away, status and arrival time.
+- Every stop with the scheduled time crossed out and the live time beside it, where the train is now ("between Harlem Ave. and Berwyn") and how old its GPS fix is.
+- Drag the sheet up for all stops. The train is highlighted on the map, and tapping it on the map finds it on the board.
 
 ### Map
-- Every Metra line in its official color, station dots, and trains that refresh every 30 s. Tap a train for its number, destination, next stop and delay.
-- With a **Going to** station set, the map only shows trains running from your station toward it that haven't reached it yet (Settings → *Trains on the map* → *All trains* shows everything).
-- **Map settings** (layers button): background, opacity, a railway-tracks overlay, **3D buildings** (from street level in), line opacity and width, and on/off switches for lines, stations and trains. Saved per device.
-- Home and work appear as labelled pins; the map opens framed on your commute.
+
+- **Every line** in its official color, with station dots and trains that refresh every 30 seconds. Arrows show which way each train is heading.
+- **Your commute.** Home and work are labelled pins, and the map opens framed on your trip. 🏠 jumps back to it, and ◎ shows where you are.
+- **Map tab.** The map full screen on a phone. A row of line chips focuses one line: only its stations and trains show, and a card gives its train count and a link to its timetable.
+- **Trains to your stop.** With a **Going to** station set, only trains running from your station toward it (that haven't reached it yet) are shown. **Show all** or Settings → *Trains on the map* → *All trains* shows everything.
+- **Map settings** (layers button), saved per device:
+  - Background: self-hosted street map (matches the theme, or always light or dark), online streets or satellite, or **Simple** (lines only).
+  - Background opacity, a railway-tracks overlay, and **3D buildings** (tilt with two fingers or a right-drag).
+  - Line opacity and width, and on/off switches for lines, stations and trains.
+
+### CTA 'L'
+
+- Switch **Metra / CTA** at the top. The CTA side has its own stations, its own home and work, and remembers which side you were on.
+- **Arrivals.** One group per line and direction at your station: the next train big with its run number and a **Live** badge, and the following trains as "Then" times. Pick a **Going to** station to see only trains that go there, with an estimated arrival.
+- **Timetable.** Like Metra's: the trains *on the way now* and the rest of *later today* from your station, or a whole line from the line chips.
+- **Map.** Every 'L' train with its heading and next stop, line chips to focus one line, and a tap to follow a train stop by stop.
+- **Reliability.** With a Train Tracker key the server records departures. After 5+ days each group shows "92% on time · every 7 min (scheduled 6) · longest wait 18 min · 2 delays this week" (see [CTA history](#cta-apicta)).
+- Without a Train Tracker key, boards come from CTA's schedule and the map has no trains.
 
 ### Alerts
-- **Bell** (default), **Banner** or **Off**, for **all lines** or **my lines** (lines through your home, work and selected stations). Set in ⚙ Settings.
-- Stale and out-of-service trains are hidden: positions that stop updating for 3+ minutes, and trains still tagged with a trip that has ended.
-- The status pill checks the age of Metra's data itself, so it shows "Live · 4 min old" when Metra falls behind, and falls back to the schedule if the feed fails.
 
-### Settings page (⚙)
-- **Your commute** (shared by all devices): home, work, the time it switches to trains home, workdays.
-- **Appearance** and **Display** (this device only): theme, number of trains, trains on the map, hide the From/Going-to boxes, alerts bell/banner/off.
-- **About**: realtime status, schedule version, map status.
+- Shown behind a **🔔 bell** with a badge for new ones (red if they're on your lines), as a **banner** across the top, or **off**. Choose **all lines** or **my lines** (lines through your home, work and selected stations).
+- Alerts that mean trains won't match the timetable (extra service, line closures, trains running express) are tagged **Schedule change**, listed first, and shown above the board for your line.
+- Trains that stop updating for 3+ minutes, or still carry a trip that has ended, are hidden from the map.
+- The status pill checks the age of Metra's data itself ("Live · 4 min old" when Metra falls behind) and falls back to the schedule if the feed fails.
 
-### Other
-- Works on phones, dark and light modes, installable as a web app.
+### Your commute and settings (⚙)
+
+- **Your commute** (shared by every device, saved on the server): home, work, the time it switches to trains home, and workdays. On workdays the app opens on home → work before the switch time and work → home after. Other days open on the home board. A first visit shows a **Set up your commute** card.
+- **Appearance** (this device): light or dark theme, also on the 🌙 button at the top.
+- **Display** (this device): trains on the board, trains on the map (going to my stop / all), show or hide the From/Going-to boxes, and alerts (bell / banner / off, all lines / my lines).
+- **About**: realtime status, schedule version and map status.
+
+### Under the hood
+
+- **Works anywhere.** Phones, tablets and desktops, in dark and light mode, and installable to your home screen.
+- **Schedule-only mode.** Without `METRA_API_TOKEN`, everything runs from the published schedule and train positions are estimated along the tracks. Add the key and the app switches to live data.
 - **History** in SQLite (`/config/history.db`): every realtime prediction, cancellation and alert, kept for `HISTORY_DAYS` (default 365), with on-time stats and CSV export.
-- **Schedule-only mode**: without `METRA_API_TOKEN`, everything runs from the published schedule and train positions are estimated along the tracks.
+- **Home Assistant.** `/api/now` gives the right trip for the time of day, ready for a weekday-morning phone notification ([below](#home-assistant-morning-train-notification)).
+- **Self-hosted map.** Map tiles, fonts and icons come from your server ([The map](#the-map)).
 
 ### Data and licensing
 - The schedule (static GTFS) comes from `https://schedules.metrarail.com/gtfs/schedule.zip`. The app checks `published.txt` every hour and reloads when it changes, and re-downloads the whole file once a week in case it changed silently. A download is only used if it reads correctly and has trains in the coming week; the previous schedule is kept as a backup.
@@ -135,7 +232,7 @@ While the map is still downloading, or if the download failed, the map options f
 
 - Responses are gzip-compressed. Scripts are cached by the phone and only downloaded again after an update (the map library is about 276 KB once).
 - The train list is about 3 KB every 30 s. The app stops refreshing when it's in the background or the phone is locked.
-- The **Today's timetable** tab doesn't load the map or train positions at all.
+- The **Timetable** tab doesn't load the map or train positions at all.
 - Map tiles are cached and only cover what's on screen. 3D buildings add the most; turn them off in the map settings if data matters.
 
 ## Configuration

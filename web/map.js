@@ -676,21 +676,81 @@
       commuteCtl.update();
     }
 
+    // How much of the map is covered by the panels floating over it (line chips and the
+    // "Trains to …" chip on top, the note and line card at the bottom), so a fit keeps
+    // the pins clear of them.
+    function overlayInsets() {
+      const box = map.getContainer().getBoundingClientRect();
+      const wrap = map.getContainer().parentElement;
+      let top = 0, bottom = 0;
+      if (box.height) {
+        for (const el of wrap.querySelectorAll(".map-head, .map-clear")) {
+          if (el.hidden || !el.offsetParent) continue;
+          const r = el.getBoundingClientRect();
+          if (r.height && r.top < box.top + box.height / 2) top = Math.max(top, r.bottom - box.top);
+        }
+        for (const el of wrap.querySelectorAll(".map-note, .line-card")) {
+          if (el.hidden || !el.offsetParent) continue;
+          const r = el.getBoundingClientRect();
+          if (r.height && r.bottom > box.top + box.height / 2) bottom = Math.max(bottom, box.bottom - r.top);
+        }
+      }
+      return { top, bottom };
+    }
+
+    // The camera right after the last commute fit. While it hasn't moved since, the map is
+    // still "framed on the commute", and a change in the map's size (tab switch, rotating
+    // the phone, the page settling on load) fits it again instead of leaving it off-centre.
+    let framedCam = null;
+    const camKey = () => {
+      const c = map.getCenter();
+      return [c.lng.toFixed(6), c.lat.toFixed(6), map.getZoom().toFixed(4), map.getBearing().toFixed(2), map.getPitch().toFixed(2)].join();
+    };
+
     /** Frame home and work (or whichever is set). Returns false if neither is set. */
     function fitPlaces(animate = true) {
       const pts = [places.home, places.work].filter(Boolean);
       if (!pts.length) return false;
+      const box = map.getContainer();
+      if (!box.clientWidth || !box.clientHeight) { framedCam = "pending"; return true; }  // hidden: fit once it's shown
+      const ins = overlayInsets();
+      const opts = { duration: animate ? 800 : 0 };
       if (pts.length === 1) {
-        map.flyTo({ center: [pts[0].lon, pts[0].lat], zoom: 12.5, duration: animate ? 800 : 0 });
+        // Centre the pin in the clear part of the map.
+        map.flyTo({ ...opts, center: [pts[0].lon, pts[0].lat], zoom: 12.5, offset: [0, (ins.top - ins.bottom) / 2] });
       } else {
         const b = new maplibregl.LngLatBounds();
         pts.forEach((p) => b.extend([p.lon, p.lat]));
-        // Room for the pins + labels above each point, and the info bar at the bottom.
-        const h = map.getContainer().clientHeight;
-        const pad = { top: Math.min(110, h * 0.25), bottom: Math.min(80, h * 0.2), left: 70, right: 70 };
-        map.fitBounds(b, { padding: pad, maxZoom: 13, duration: animate ? 800 : 0 });
+        // Room for the pins + labels above each point, clear of the floating panels.
+        const w = box.clientWidth, h = box.clientHeight;
+        let top = ins.top + 84, bottom = ins.bottom + 30;
+        if (top + bottom > h * 0.7) { const k = (h * 0.7) / (top + bottom); top *= k; bottom *= k; }
+        const side = Math.min(140, w * 0.2);  // pin labels are centred on the pin and ~150-200px wide
+        map.fitBounds(b, { ...opts, padding: { top, bottom, left: side, right: side }, maxZoom: 13 });
       }
+      if (animate) {
+        framedCam = null;
+        map.once("moveend", () => { framedCam = camKey(); });
+      } else framedCam = camKey();
       return true;
+    }
+    // Fit the commute again if the map is still framed on it (e.g. a panel over the map came or went).
+    function keepFramed() {
+      if (framedCam && (framedCam === "pending" || framedCam === camKey())) fitPlaces(false);
+    }
+    map.on("resize", keepFramed);
+    // A panel over the map appearing or going away (the "Trains to …" chip, the note at the
+    // bottom) changes the clear area: keep the commute framed inside it.
+    {
+      let queued = false;
+      const panels = new MutationObserver(() => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; keepFramed(); });
+      });
+      for (const el of map.getContainer().parentElement.querySelectorAll(".map-head, .map-clear, .map-note, .line-card")) {
+        panels.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+      }
     }
 
     // Map button: jump back to your commute.
@@ -726,6 +786,7 @@
       get selectedTrip() { return selected && selected.tripId; },
       setPlaces,
       fitPlaces,
+      keepFramed,
       flyTo(lat, lon) { map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 12.5), duration: 800 }); },
       onThemeChange() {
         ready.then(() => {

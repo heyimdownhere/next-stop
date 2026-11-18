@@ -16,7 +16,7 @@ Map tiles were blocked in the dev sandbox, so these have never been seen drawing
 - [ ] Online options and fallbacks: Streets (OpenFreeMap), Satellite (Esri), tracks overlay (OpenRailwayMap). The fallback to Simple was tested; the online maps themselves couldn't be reached from the sandbox.
 - [ ] 3D buildings after the Nov 11 fix: no hard edge when the map is tilted; check the 40% default looks right (raise it in the layers panel if walls look see-through), and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
-- [ ] Retake the README screenshots with the self-hosted map showing (current ones use the Simple background).
+- [x] Retake the README screenshots with the self-hosted map showing (done Nov 18: phone shots at S25 Ultra size, plus demo GIFs).
 
 Over the first days and weeks:
 
