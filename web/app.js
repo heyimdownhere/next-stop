@@ -533,8 +533,8 @@
     $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line || state.ttLine);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
-    if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
     if (dest) chip.innerHTML = `Trains to <b>${esc(dest.name)}</b> <span>· Show all ✕</span>`;
+    if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
   }
   $("clear-btn").addEventListener("click", clearView);
   $("map-clear").addEventListener("click", clearView);
