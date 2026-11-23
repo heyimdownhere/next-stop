@@ -216,6 +216,32 @@ def test_commute_only_trips_serving_both_stations(tracker):
     assert tracker.commute("B", "A", now=NOW)["trips"] == []
 
 
+def test_next_trains_to_a_station_with_live_times(tracker):
+    # Same trains as /commute, by name on both ends, with where each time comes from.
+    _apply(tracker, [_tu("t-0800", [("A", 300)])])
+    n = tracker.next_trains("alpha", to="central", limit=2, now=NOW)
+    assert n["station"]["id"] == "A" and n["to"] == {"id": "C", "name": "Central"} and n["direction"] == "inbound"
+    assert [t["line"] for t in n["trains"]] == ["L1", "L2"]
+    first, second = n["trains"]
+    assert first["live"] and first["source"] == "live" and first["status"] == "5 min late"
+    assert first["departure"].startswith("2026-11-09T08:05") and first["departure_scheduled"].startswith("2026-11-09T08:00")
+    assert first["arrival"] and first["duration_min"] == 40
+    assert not second["live"] and second["source"] == "scheduled"
+    assert n["message"].startswith("Alpha \u2192 Central: 8:05 AM (5 min late)")
+    back = tracker.next_trains("B", to="A", now=NOW)  # nothing runs that way
+    assert back["trains"] == [] and back["message"] == "No upcoming trains Bravo \u2192 Alpha."
+    from app.tracker import SameStation
+    with pytest.raises(SameStation):
+        tracker.next_trains("A", to="alpha", now=NOW)
+    with pytest.raises(KeyError):
+        tracker.next_trains("A", to="Nowhere", now=NOW)
+    assert "to" not in tracker.next_trains("A", "inbound", now=NOW)
+    from app.tracker import WrongDirection
+    with pytest.raises(WrongDirection):  # Central is toward downtown from Alpha
+        tracker.next_trains("A", "outbound", to="C", now=NOW)
+    assert len(tracker.next_trains("A", "inbound", to="C", limit=2, now=NOW)["trains"]) == 2
+
+
 def test_history_records_and_summarises(tracker, tmp_path):
     from app.history import History
 
@@ -323,6 +349,9 @@ def test_direction_flag_to_or_from_downtown(tracker):
     assert n["station"]["id"] == "A" and n["direction"] == "inbound" and len(n["trains"]) == 2
     assert n["trains"][0]["final_stop"] == "Central" and n["trains"][0]["minutes_until"] == 10
     assert n["message"].startswith("Alpha toward downtown: 8:00 AM to Central (scheduled)")
+    assert tracker.next_trains("lph", None, now=NOW)["station"]["id"] == "A"  # part of a name
+    with pytest.raises(KeyError):
+        tracker.find_station("lph")  # ...only for the API, not for HOME_STATION and friends
     with pytest.raises(KeyError):
         tracker.next_trains("Nowhere", None, now=NOW)
 

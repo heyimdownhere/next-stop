@@ -289,21 +289,50 @@ All Metra endpoints read the server's in-memory copy of Metra's data. **No reque
 
 Which way a train is going (`inbound`/`outbound`) is decided by geography: a train is inbound if its last stop is closer to the Loop than your station.
 
-Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&direction=inbound"`
+### Next X trains
+
+`GET /api/next` gives the next `limit` trains at a station (1–20, default 5) in one of two ways. Stations can be ids (`PETERSON`) or names, any case: a full name, the start of one (`peterson`), or part of one (`union station`). Old names Metra has since changed work too (`ogilvie` is Chicago OTC). A name that fits more than one station returns 400 with the ids to choose from.
+
+| Ask for | Example |
+|---|---|
+| Trains from one station **to** another (only trains that stop at both, with arrival times) | `/api/next?station=peterson&to=otc&limit=3` |
+| Trains **toward or away from downtown** (`direction=inbound`/`to`/`downtown`, or `outbound`/`from`) | `/api/next?station=peterson&direction=inbound&limit=3` |
+
+Times are live: `departure` (and `arrival`) is Metra's latest prediction when it has one, and `departure_scheduled` the timetable time. Each train says where its time comes from:
+
+| `source` | `live` | Meaning |
+|---|---|---|
+| `live` | `true` | Metra's own prediction for this train. |
+| `tracking` | `false` | Metra has the train's GPS position but no prediction; the delay is estimated from where it is. |
+| `scheduled` | `false` | No live data yet (usually trains not running yet); this is the timetable time. |
+
+Example: `curl "http://<your-server-ip>:8080/api/next?station=peterson&to=otc&limit=2"`
 
 ```json
 {
-  "station": {"id": "NAPERVILLE", "name": "Naperville"},
+  "station": {"id": "PETERSON", "name": "Peterson/Ridge"},
+  "to": {"id": "OTC", "name": "Chicago OTC"},
   "direction": "inbound",
-  "next_minutes": 12,
-  "message": "Naperville toward downtown: 7:12 AM to Chicago Union Station (on time), ...",
+  "next_departure": "2026-11-23T09:38:12-06:00",
+  "next_minutes": 4,
+  "message": "Peterson/Ridge → Chicago OTC: 9:38 AM (3 min late), 10:28 AM (scheduled)",
+  "realtime": true,
   "trains": [
-    {"departure": "2026-11-09T07:12:00-06:00", "minutes_until": 12, "status": "on time",
-     "line": "BNSF", "train": "1242", "destination": "Chicago Union Station",
-     "final_arrival": "2026-11-09T07:56:00-06:00", "live": true, "...": "..."}
+    {"departure": "2026-11-23T09:38:12-06:00", "departure_scheduled": "2026-11-23T09:35:00-06:00",
+     "minutes_until": 4, "status": "3 min late", "delay_min": 3, "live": true, "source": "live",
+     "line": "UP-N", "train": "324", "destination": "Chicago OTC",
+     "arrival": "2026-11-23T09:59:40-06:00", "duration_min": 21, "...": "..."},
+    {"departure": "2026-11-23T10:28:00-06:00", "departure_scheduled": "2026-11-23T10:28:00-06:00",
+     "minutes_until": 54, "status": "scheduled", "delay_min": null, "live": false, "source": "scheduled",
+     "line": "UP-N", "train": null, "destination": "Chicago OTC",
+     "arrival": "2026-11-23T10:50:00-06:00", "duration_min": 22, "...": "..."}
   ]
 }
 ```
+
+With `to`, `direction` in the answer says which way the trip goes, and adding a `direction` that points the other way returns 400 rather than an empty list. `train` (the train number) is only known once a train is running. With `direction` instead of `to`, there's no `to` or `arrival`, and `message` names each train's destination: "Peterson/Ridge toward downtown: 9:38 AM to Chicago OTC (3 min late), …".
+
+### Everything else
 
 | Endpoint | Description |
 |---|---|
@@ -311,7 +340,8 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 | `GET /api/systems` | The transit systems and where their API is. |
 | `GET /api/status` | Mode, feed health, schedule version, map status, history stats. |
 | `GET /api/stations` | Stations with the lines that serve them. Sent with an ETag: unchanged lists cost an empty 304. |
-| `GET /api/next?station=ID&direction=inbound` | **Next trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away, omit for both. `station` takes an id or a name. Optional `limit` (1–20). |
+| `GET /api/next?station=NAME&to=NAME&limit=X` | **Next X trains** from one station to another (see [Next X trains](#next-x-trains)). |
+| `GET /api/next?station=NAME&direction=inbound&limit=X` | **Next X trains** toward (`inbound`) or away from (`outbound`) downtown; omit `direction` for both. |
 | `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board (`limit` 1–50); with `to`, only trains that later stop there. |
 | `GET /api/line?route=ID[&direction=inbound]` | Every train on a line still to run today (running first): where it starts and ends, next stop and delay for running trains. Used by the Map tab's line panel. |
 | `GET /api/timetable?station=ID[&to=ID]` | Every train still to come today (until 3 AM, the end of Metra's service day), with live times where available. |
@@ -321,7 +351,7 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 | `GET /api/settings` / `PUT /api/settings` | Commute profile shared by all devices: `home_station`, `home_dest`, `work_station`, `switch_time`, `work_days` (Monday = 0), plus `leg` (which trip applies now). |
 | `GET /api/now?limit=5` | The board for right now (see Home Assistant above). |
 | `GET /api/home?limit=5` / `GET /api/work?limit=5` | Home and work boards. |
-| `GET /api/commute?from=ID&to=ID&limit=3` | Commute summary for Home Assistant. |
+| `GET /api/commute?from=NAME&to=NAME&limit=3` | Commute summary for Home Assistant (ids or names, `limit` 1–20). |
 | `GET /api/lines` | GeoJSON of every line. |
 | `GET /api/history/station?station=ID&days=30` | On-time %, average and worst delay, and cancellations per scheduled departure. |
 | `GET /api/history/alerts?days=30` | Every alert seen. |

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .commute import SettingsChange, clean_changes, commute_leg
 from .config import Settings
-from .tracker import AmbiguousStation, Tracker, normalize_direction
+from .tracker import AmbiguousStation, SameStation, Tracker, WrongDirection, normalize_direction
 from .user_settings import UserSettings
 from .util import NO_STORE, csv_response, json_response as _json
 
@@ -45,6 +45,7 @@ class Train(BaseModel):
     status: str
     delay_min: int | None
     live: bool
+    source: str
     cancelled: bool
     direction: str | None
     line: str | None
@@ -72,6 +73,7 @@ class NextTrains(BaseModel):
     """GET /next: the next trains at a station."""
 
     station: Place
+    to: Place | None = None  # only when `to` was asked for
     direction: str
     trains: list[Train]
     next_departure: str | None
@@ -291,44 +293,61 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         return tracker.lines_json().response(request)
 
     # ---- plain JSON for Home Assistant / scripts ---------------------------------------
+    def ambiguous(exc: AmbiguousStation):
+        opts = ", ".join(f"{o['id']} ({'/'.join(o['lines'])})" for o in exc.options)
+        return _json({
+            "detail": f"{exc.query!r} matches more than one station; use an id: {opts}",
+            "options": exc.options,
+        }, 400)
+
     @r.get("/next", response_model=NextTrains, response_model_exclude_unset=True)
     def next_trains(
         response: Response,
-        station: str = Query(..., min_length=1, description="Station id (e.g. EVANSTON) or name"),
+        station: str = Query(..., min_length=1, description="Station id (e.g. PETERSON) or name (e.g. peterson)"),
+        to: str | None = Query(None, description="Only trains that go on to stop here: station id or name (e.g. otc)"),
         direction: str | None = Query(
             None, description="inbound/to (toward downtown), outbound/from (away from downtown); omit for both"
         ),
-        limit: int = Query(5, ge=1, le=20),
+        limit: int = Query(5, ge=1, le=20, description="How many trains"),
     ):
-        """Next trains at a station, optionally only toward or away from downtown."""
+        """The next `limit` trains at a station: only those going on to `to`, or only
+        toward or away from downtown. Times are Metra's live predictions where it has
+        them; each train's `live` and `source` say which."""
         need_schedule()
         d = direction_or_400(direction)
         response.headers.update(NO_STORE)
         try:
-            return tracker.next_trains(station, d, limit)
+            return tracker.next_trains(station, d, limit, to=to or None)
         except AmbiguousStation as exc:
-            opts = ", ".join(f"{o['id']} ({'/'.join(o['lines'])})" for o in exc.options)
-            return _json({
-                "detail": f"{station!r} matches more than one station; use an id: {opts}",
-                "options": exc.options,
-            }, 400)
-        except KeyError:
-            raise HTTPException(404, f"Unknown station {station!r}. See /api/stations for ids.")
+            return ambiguous(exc)
+        except KeyError as exc:
+            raise HTTPException(404, f"Unknown station {exc.args[0]!r}. See /api/stations for ids.")
+        except SameStation:
+            raise HTTPException(400, "station and to are the same station")
+        except WrongDirection as exc:
+            way = "toward" if exc.trip_direction == "inbound" else "away from"
+            raise HTTPException(400, f"{to!r} is {way} downtown from {station!r}; leave out direction, or use "
+                                     f"direction={exc.trip_direction}")
 
     @r.get("/commute", response_model=Commute, response_model_exclude_unset=True, response_model_by_alias=True)
     def commute_trains(
         response: Response,
-        from_: str = Query(..., alias="from", min_length=1, description="Origin station id"),
-        to: str = Query(..., min_length=1, description="Destination station id"),
-        limit: int = Query(3, ge=1, le=10),
+        from_: str = Query(..., alias="from", min_length=1, description="Origin station id or name"),
+        to: str = Query(..., min_length=1, description="Destination station id or name"),
+        limit: int = Query(3, ge=1, le=20),
     ):
         """Next trains from one station to another. Designed for Home Assistant's REST sensor."""
         need_schedule()
         response.headers.update(NO_STORE)
         try:
-            return tracker.commute(from_, to, limit)
+            from_id, to_id = tracker.find_station(from_, partial=True), tracker.find_destination(to, partial=True)
+            if from_id == to_id:
+                raise HTTPException(400, "from and to are the same station")
+            return tracker.commute(from_id, to_id, limit)
+        except AmbiguousStation as exc:
+            return ambiguous(exc)
         except KeyError as exc:
-            raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
+            raise HTTPException(404, f"Unknown station {exc.args[0]!r}. See /api/stations for ids.")
 
     # ---- settings and the boards built on them -----------------------------------------
     @r.get("/settings")

@@ -453,6 +453,16 @@ def test_every_system_is_listed_and_served_under_its_own_path(tracker, tmp_path,
     # Same answer at both addresses (apart from when it was made, which can tick over a second).
     same = lambda url: {k: v for k, v in c.get(url).json().items() if k != "generated_at"}
     assert same("/api/metra/next?station=A") == same("/api/next?station=A")
+    # From one station to another, by name; the same station twice is a mistake.
+    to = c.get("/api/next?station=alpha&to=central&limit=2").json()
+    assert to["station"]["id"] == "A" and to["to"]["id"] == "C" and len(to["trains"]) <= 2
+    assert all(t["source"] in ("live", "tracking", "scheduled") for t in to["trains"])
+    assert c.get("/api/next?station=A&to=alpha").status_code == 400
+    assert c.get("/api/next?station=A&to=Nowhere").status_code == 404
+    assert c.get("/api/commute?from=alpha&to=central").json()["to"]["id"] == "C"
+    assert c.get("/api/commute?from=alpha&to=A").status_code == 400
+    wrong = c.get("/api/next?station=A&to=C&direction=outbound")
+    assert wrong.status_code == 400 and "direction=inbound" in wrong.json()["detail"]
     assert c.get("/api/cta/status").status_code == 200
     paths = c.get("/openapi.json").json()["paths"]
     assert "/api/metra/next" in paths and "/api/cta/arrivals" in paths and "/api/next" not in paths

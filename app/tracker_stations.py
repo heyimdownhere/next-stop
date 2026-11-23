@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .static_gtfs import S_ARR, S_SEQ, S_STOP, T_ROUTE, _dist_m
 from .tracker_core import TrackerCore
-from .tracker_helpers import LOOP, AmbiguousStation, _norm_name
+from .tracker_helpers import LOOP, STATION_ALIASES, AmbiguousStation, _norm_name
 from .util import StaticJson
 
 
@@ -125,8 +125,12 @@ class StationQueries(TrackerCore):
             return None
         return "inbound" if there < here else "outbound"
 
-    def find_station(self, query: str) -> str:
-        """Resolve a station id or name (case/punctuation-insensitive) to its id."""
+    def find_station(self, query: str, partial: bool = False) -> str:
+        """Resolve a station id or name (case/punctuation-insensitive) to its id.
+
+        `partial`: if nothing matches the whole name or its start, also try part of
+        a name ("union station"). For people typing into the API; settings don't
+        use it, so a mistyped HOME_STATION is reported rather than guessed."""
         s = self.static
         if query in s.station_children:
             return query
@@ -135,11 +139,16 @@ class StationQueries(TrackerCore):
         for sid in stations:
             if _norm_name(sid) == q:
                 return sid
+        if STATION_ALIASES.get(q) in s.station_children:
+            return STATION_ALIASES[q]
         labelled = [sid for sid in stations if _norm_name(self.station_label(sid)) == q]
         if len(labelled) == 1:
             return labelled[0]
         exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
         matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        if not matches and partial and len(q) >= 3:
+            # Part of the name, e.g. "union station" for Chicago Union Station.
+            matches = [sid for sid in stations if q in _norm_name(s.stops[sid]["name"])]
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
@@ -149,6 +158,21 @@ class StationQueries(TrackerCore):
                 {"id": sid, "name": self.station_label(sid), "lines": lines.get(sid, [])} for sid in sorted(matches)
             ])
         raise KeyError(query)
+
+    def find_destination(self, query: str, partial: bool = False) -> str:
+        """Like find_station, but a destination only needs arrivals, so an
+        arrival-only stop (e.g. the end of a line) matches too, by id or exact name."""
+        try:
+            return self.find_station(query, partial)
+        except AmbiguousStation:
+            raise
+        except KeyError:
+            s, q = self.static, _norm_name(query)
+            matches = [sid for sid, st in s.stops.items()
+                       if sid == query or _norm_name(sid) == q or _norm_name(st["name"]) == q]
+            if len(matches) == 1:
+                return matches[0]
+            raise
 
     def station_stops(self, station_id: str) -> list[str]:
         """Stop ids belonging to a station id. Raises KeyError."""
