@@ -13,7 +13,7 @@ from . import realtime as rtp
 from .history import day_type
 from .static_gtfs import S_ARR, S_DEP, S_SEQ, S_STOP, T_ROUTE, T_SERVICE, T_SHORT_NAME
 from .tracker_helpers import (
-    BOARD_HISTORY_DAYS, BOARD_HISTORY_MIN_OBS, DEPARTURE_LOOKBACK_SECONDS, SameStation, _status, is_schedule_change,
+    BOARD_HISTORY_DAYS, BOARD_HISTORY_MIN_OBS, DEPARTURE_LOOKBACK_SECONDS, SameStation, WrongDirection, _status, is_schedule_change,
 )
 from .tracker_map import MapQueries
 
@@ -322,10 +322,17 @@ class BoardQueries(MapQueries):
         """Simple API: next trains at a station, optionally only to/from downtown,
         or only those that go on to stop at `to`. Stations may be ids or names."""
         now = time.time() if now is None else now
-        station_id = self.find_station(station)
-        to_id = self.find_destination(to) if to else None
+        station_id = self.find_station(station, partial=True)
+        to_id = self.find_destination(to, partial=True) if to else None
         if to_id is not None and to_id == station_id:
             raise SameStation(to)
+        trip_dir = None
+        if to_id is not None:
+            # Which way the trip goes (reported, not filtered on); a `direction` the
+            # other way could only ever give an empty list.
+            trip_dir = self._direction(station_id, to_id)
+            if direction and trip_dir and direction != trip_dir:
+                raise WrongDirection(trip_dir)
         board = self.departures(station_id, limit, now=now, direction=direction, to=to_id)
         trains = [self._api_train(r, now) for r in board["departures"]]
         parts = [self._summary_part(r, t["status"], with_destination=to_id is None)
@@ -339,7 +346,7 @@ class BoardQueries(MapQueries):
             empty = f"No upcoming trains {name}{label}."
         out = {
             "station": board["station"],
-            "direction": direction or "both",
+            "direction": direction or trip_dir or "both",
             "trains": trains,
             "next_departure": nxt["departure"] if nxt else None,
             "next_minutes": nxt["minutes_until"] if nxt else None,

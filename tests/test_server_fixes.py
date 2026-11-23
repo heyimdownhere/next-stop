@@ -461,6 +461,8 @@ def test_every_system_is_listed_and_served_under_its_own_path(tracker, tmp_path,
     assert c.get("/api/next?station=A&to=Nowhere").status_code == 404
     assert c.get("/api/commute?from=alpha&to=central").json()["to"]["id"] == "C"
     assert c.get("/api/commute?from=alpha&to=A").status_code == 400
+    wrong = c.get("/api/next?station=A&to=C&direction=outbound")
+    assert wrong.status_code == 400 and "direction=inbound" in wrong.json()["detail"]
     assert c.get("/api/cta/status").status_code == 200
     paths = c.get("/openapi.json").json()["paths"]
     assert "/api/metra/next" in paths and "/api/cta/arrivals" in paths and "/api/next" not in paths

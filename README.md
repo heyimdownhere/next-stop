@@ -291,7 +291,7 @@ Which way a train is going (`inbound`/`outbound`) is decided by geography: a tra
 
 ### Next X trains
 
-`GET /api/next` gives the next `limit` trains at a station (1–20, default 5) in one of two ways. Stations can be ids (`PETERSON`) or names, any case: a full name, the start of one (`peterson`), or part of one (`union station`). A name that fits more than one station returns 400 with the ids to choose from.
+`GET /api/next` gives the next `limit` trains at a station (1–20, default 5) in one of two ways. Stations can be ids (`PETERSON`) or names, any case: a full name, the start of one (`peterson`), or part of one (`union station`). Old names Metra has since changed work too (`ogilvie` is Chicago OTC). A name that fits more than one station returns 400 with the ids to choose from.
 
 | Ask for | Example |
 |---|---|
@@ -312,7 +312,7 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=peterson&to=otc&li
 {
   "station": {"id": "PETERSON", "name": "Peterson/Ridge"},
   "to": {"id": "OTC", "name": "Chicago OTC"},
-  "direction": "both",
+  "direction": "inbound",
   "next_departure": "2026-11-23T09:38:12-06:00",
   "next_minutes": 4,
   "message": "Peterson/Ridge → Chicago OTC: 9:38 AM (3 min late), 10:28 AM (scheduled)",
@@ -330,7 +330,7 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=peterson&to=otc&li
 }
 ```
 
-`train` (the train number) is only known once a train is running. With `direction` instead of `to`, there's no `to` or `arrival`, and `message` names each train's destination: "Peterson/Ridge toward downtown: 9:38 AM to Chicago OTC (3 min late), …".
+With `to`, `direction` in the answer says which way the trip goes, and adding a `direction` that points the other way returns 400 rather than an empty list. `train` (the train number) is only known once a train is running. With `direction` instead of `to`, there's no `to` or `arrival`, and `message` names each train's destination: "Peterson/Ridge toward downtown: 9:38 AM to Chicago OTC (3 min late), …".
 
 ### Everything else
 

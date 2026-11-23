@@ -62,6 +62,20 @@ class SameStation(ValueError):
     """A trip asked for from a station to itself."""
 
 
+class WrongDirection(ValueError):
+    """A `to` station that lies the other way from the `direction` asked for."""
+
+    def __init__(self, trip_direction: str):
+        super().__init__(trip_direction)
+        self.trip_direction = trip_direction
+
+
+# Names people still use for stations Metra has renamed (normalised, as _norm_name gives).
+STATION_ALIASES = {
+    "ogilvie": "OTC", "ogilvietransportationcenter": "OTC", "northwesternstation": "OTC",
+}
+
+
 def _norm_name(x: str) -> str:
     return re.sub(r"[^a-z0-9]", "", x.lower())
 

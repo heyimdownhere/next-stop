@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .commute import SettingsChange, clean_changes, commute_leg
 from .config import Settings
-from .tracker import AmbiguousStation, SameStation, Tracker, normalize_direction
+from .tracker import AmbiguousStation, SameStation, Tracker, WrongDirection, normalize_direction
 from .user_settings import UserSettings
 from .util import NO_STORE, csv_response, json_response as _json
 
@@ -324,6 +324,10 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
             raise HTTPException(404, f"Unknown station {exc.args[0]!r}. See /api/stations for ids.")
         except SameStation:
             raise HTTPException(400, "station and to are the same station")
+        except WrongDirection as exc:
+            way = "toward" if exc.trip_direction == "inbound" else "away from"
+            raise HTTPException(400, f"{to!r} is {way} downtown from {station!r}; leave out direction, or use "
+                                     f"direction={exc.trip_direction}")
 
     @r.get("/commute", response_model=Commute, response_model_exclude_unset=True, response_model_by_alias=True)
     def commute_trains(
@@ -336,7 +340,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         need_schedule()
         response.headers.update(NO_STORE)
         try:
-            from_id, to_id = tracker.find_station(from_), tracker.find_destination(to)
+            from_id, to_id = tracker.find_station(from_, partial=True), tracker.find_destination(to, partial=True)
             if from_id == to_id:
                 raise HTTPException(400, "from and to are the same station")
             return tracker.commute(from_id, to_id, limit)
