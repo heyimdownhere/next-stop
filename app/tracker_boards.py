@@ -262,6 +262,9 @@ class BoardQueries(MapQueries):
             "status": status,
             "delay_min": delay_min,
             "live": r["live"],
+            # Where the time comes from, as the board's badge: Metra's own prediction,
+            # a delay worked out from the train's GPS position, or the timetable.
+            "source": "tracking" if r.get("tracking") else "live" if r["live"] else "scheduled",
             "cancelled": r["cancelled"],
             "direction": r.get("direction"),
             "line": r["route_short"],
@@ -315,18 +318,24 @@ class BoardQueries(MapQueries):
         }
 
     def next_trains(self, station: str, direction: str | None = None, limit: int = 5,
-                    now: float | None = None) -> dict:
-        """Simple API: next trains at a station, optionally only to/from downtown."""
+                    now: float | None = None, to: str | None = None) -> dict:
+        """Simple API: next trains at a station, optionally only to/from downtown,
+        or only those that go on to stop at `to`. Stations may be ids or names."""
         now = time.time() if now is None else now
         station_id = self.find_station(station)
-        board = self.departures(station_id, limit, now=now, direction=direction)
+        to_id = self.find_destination(to) if to else None
+        if to_id is not None and to_id == station_id:
+            raise ValueError("to is the same station")
+        board = self.departures(station_id, limit, now=now, direction=direction, to=to_id)
         trains = [self._api_train(r, now) for r in board["departures"]]
-        parts = [self._summary_part(r, t["status"], with_destination=True)
+        parts = [self._summary_part(r, t["status"], with_destination=to_id is None)
                  for r, t in zip(board["departures"], trains)]
         nxt = next((t for t in trains if not t["cancelled"]), None)
         name = board["station"]["name"]
         label = {"inbound": " toward downtown", "outbound": " away from downtown"}.get(direction or "", "")
-        return {
+        if to_id is not None:
+            label = f" \u2192 {board['to']['name']}"
+        out = {
             "station": board["station"],
             "direction": direction or "both",
             "trains": trains,
@@ -336,6 +345,9 @@ class BoardQueries(MapQueries):
             "realtime": board["realtime"],
             "generated_at": self._iso(now),
         }
+        if to_id is not None:
+            out["to"] = {"id": to_id, "name": board["to"]["name"]}
+        return out
 
     def _final_arrival(self, trip_id: str, base: float, pred: dict | None) -> tuple[str | None, float | None, float | None]:
         """(final stop name, estimated arrival, scheduled arrival) for a trip."""

@@ -140,6 +140,9 @@ class StationQueries(TrackerCore):
             return labelled[0]
         exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
         matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        if not matches and len(q) >= 3:
+            # Part of the name, e.g. "union station" for Chicago Union Station.
+            matches = [sid for sid in stations if q in _norm_name(s.stops[sid]["name"])]
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
@@ -149,6 +152,21 @@ class StationQueries(TrackerCore):
                 {"id": sid, "name": self.station_label(sid), "lines": lines.get(sid, [])} for sid in sorted(matches)
             ])
         raise KeyError(query)
+
+    def find_destination(self, query: str) -> str:
+        """Like find_station, but a destination only needs arrivals, so an
+        arrival-only stop (e.g. the end of a line) matches too, by id or exact name."""
+        try:
+            return self.find_station(query)
+        except AmbiguousStation:
+            raise
+        except KeyError:
+            s, q = self.static, _norm_name(query)
+            matches = [sid for sid, st in s.stops.items()
+                       if sid == query or _norm_name(sid) == q or _norm_name(st["name"]) == q]
+            if len(matches) == 1:
+                return matches[0]
+            raise
 
     def station_stops(self, station_id: str) -> list[str]:
         """Stop ids belonging to a station id. Raises KeyError."""
