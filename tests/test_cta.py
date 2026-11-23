@@ -116,7 +116,7 @@ def run(coro):
 # ---- schedule -------------------------------------------------------------------------
 def test_parses_only_the_L(schedule):
     assert set(schedule.lines) == {"G", "Brn"}
-    assert schedule.lines["G"]["color"] == "#009b3a" and schedule.lines["Brn"]["short_name"] == "Brown"
+    assert schedule.lines["G"]["color"] == "#009B3A" and schedule.lines["Brn"]["short_name"] == "Brown"
     assert set(schedule.stations) == {"40100", "40200", "40300", "40400", "40500", "40600", "40700"}
     assert schedule.stations["40100"]["routes"] == ["Brn", "G"]
     assert schedule.shapes["G"][0][0] == [-87.631, 41.885]
@@ -279,7 +279,7 @@ def test_positions_accept_a_single_train_object(tmp_path, schedule):
     t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=body))
     d = run(t.trains())
     assert [(x["route_id"], x["run"]) for x in d["trains"]] == [("G", "605"), ("Brn", "404")]
-    assert d["trains"][0]["bearing"] == 180 and d["trains"][0]["color"] == "#009b3a"
+    assert d["trains"][0]["bearing"] == 180 and d["trains"][0]["color"] == "#009B3A"
 
 
 def test_follow_unknown_train_is_a_key_error(tmp_path, schedule):
@@ -551,3 +551,38 @@ def test_planned_train_has_its_stops_from_the_schedule(recorder):
 def test_planned_api(api):
     c, _ = api
     assert c.get("/api/cta/planned?key=Brn:nope&station=1&t=0").status_code == 404
+
+
+def test_planned_refuses_times_that_are_not_real(api):
+    c, _ = api
+    for t in ("inf", "-inf", "nan", "-5", "1e12"):
+        assert c.get("/api/cta/planned", params={"key": "G:5", "station": "40100", "t": t}).status_code == 422, t
+
+
+def test_alert_links_must_be_web_links(tmp_path, schedule):
+    alerts = {"CTAAlerts": {"Alert": [
+        {"AlertId": "1", "Headline": "a", "SeverityScore": "x", "AlertURL": {"#cdata-section": "javascript:alert(1)"},
+         "ImpactedService": {"Service": {"ServiceType": "R", "ServiceId": "G"}}},
+        {"AlertId": "2", "Headline": "b", "SeverityScore": "40", "AlertURL": "https://www.transitchicago.com/x",
+         "ImpactedService": {"Service": {"ServiceType": "R", "ServiceId": "G"}}},
+    ]}}
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=alerts))
+    out = {a["id"]: a for a in run(t.alerts())}
+    assert out["1"]["url"] is None and out["1"]["severity"] == 0      # a bad score doesn't break the list
+    assert out["2"]["url"] == "https://www.transitchicago.com/x"
+
+
+def test_board_stats_hour_spans_hold_every_row_they_should_across_clock_changes():
+    from app.cta_history import hour_spans
+    from app.cta_schedule import local_hour, service_date
+    from app.history import day_type
+    for when in ("2026-03-20T09:00", "2026-11-12T09:00"):  # just after each 2026 clock change
+        now = datetime.fromisoformat(when).replace(tzinfo=TZ).timestamp()
+        since = now - 30 * 86400
+        times = [since + i * 300 for i in range(30 * 288)]
+        for hour in (0, 1, 2, 3, 4, 8, 23):
+            for kind in ("weekday", "saturday", "sunday"):
+                spans = hour_spans(hour, kind, since, now)
+                for ts in times:
+                    if day_type(service_date(ts)) == kind and abs(local_hour(ts) - hour) <= 1:
+                        assert any(a <= ts < b for a, b in spans), (when, hour, kind, ts)

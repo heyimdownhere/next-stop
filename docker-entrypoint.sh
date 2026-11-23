@@ -12,7 +12,9 @@ if [ "$(id -u)" = "0" ]; then
   PGID="${PGID:-100}"
   if [ "$PUID" != "0" ]; then
     mkdir -p "$CONFIG"
-    if ! find "$CONFIG" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} + 2>/dev/null; then
+    # -h: change a symlink itself, never the file it points to (a link left in
+    # /config must not hand files elsewhere in the container to the app user).
+    if ! find "$CONFIG" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$PUID:$PGID" {} + 2>/dev/null; then
       echo "next-stop: could not hand $CONFIG to $PUID:$PGID; saving settings and history may fail" >&2
     fi
     exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups --no-new-privs "$@"

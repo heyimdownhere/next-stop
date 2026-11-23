@@ -135,20 +135,20 @@ class StationQueries(TrackerCore):
         if query in s.station_children:
             return query
         q = _norm_name(query)
-        stations = list(s.station_children)
-        for sid in stations:
-            if _norm_name(sid) == q:
-                return sid
+        idx = self._name_index()
+        if q in idx["ids"]:
+            return idx["ids"][q]
         if STATION_ALIASES.get(q) in s.station_children:
             return STATION_ALIASES[q]
-        labelled = [sid for sid in stations if _norm_name(self.station_label(sid)) == q]
+        labelled = idx["labels"].get(q, [])
         if len(labelled) == 1:
             return labelled[0]
-        exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
-        matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        names = idx["names"]
+        exact = [sid for name, sid in names if name == q]
+        matches = exact or [sid for name, sid in names if q and name.startswith(q)]
         if not matches and partial and len(q) >= 3:
             # Part of the name, e.g. "union station" for Chicago Union Station.
-            matches = [sid for sid in stations if q in _norm_name(s.stops[sid]["name"])]
+            matches = [sid for name, sid in names if q in name]
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
@@ -158,6 +158,20 @@ class StationQueries(TrackerCore):
                 {"id": sid, "name": self.station_label(sid), "lines": lines.get(sid, [])} for sid in sorted(matches)
             ])
         raise KeyError(query)
+
+    def _name_index(self) -> dict:
+        """Every station's id, label and name normalised once per schedule, so a
+        lookup doesn't run the normalising regex over every station each time."""
+        def build() -> dict:
+            s = self.static
+            ids: dict[str, str] = {}
+            labels: dict[str, list[str]] = {}
+            for sid in s.station_children:
+                ids.setdefault(_norm_name(sid), sid)
+                labels.setdefault(_norm_name(self.station_label(sid)), []).append(sid)
+            names = [(_norm_name(s.stops[sid]["name"]), sid) for sid in s.station_children]
+            return {"ids": ids, "labels": labels, "names": names}
+        return self._once("name_index", build)
 
     def find_destination(self, query: str, partial: bool = False) -> str:
         """Like find_station, but a destination only needs arrivals, so an

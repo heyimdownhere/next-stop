@@ -132,7 +132,8 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
     @r.get("/planned")
     async def planned(key: str = Query(..., min_length=3, max_length=60, description="Group key, e.g. Brn:5"),
                       station: str = Query(..., min_length=1, max_length=10, description="A station it calls at"),
-                      t: float = Query(..., description="When it's there (Unix time)"),
+                      t: float = Query(..., ge=0, le=4_102_444_800, allow_inf_nan=False,
+                                       description="When it's there (Unix time)"),
                       sign: str | None = Query(None, max_length=60, description="Its destination sign")):
         """A scheduled train's stops and times (from the schedule), for trains that aren't running yet."""
         need_schedule()
@@ -161,6 +162,7 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
         need_schedule()
         need_history()
         station_or_404(station)
+        days = min(days, cta.history.retention_days)  # nothing older is kept
         return _json({"station": cta.station(station), "days": days,
                       "groups": cta.history.station_stats(station, days, local_hour)})
 
@@ -168,6 +170,7 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
     def history_delays(days: int = Query(7, ge=1, le=3650), route: str | None = Query(None, max_length=10)):
         """Trains Train Tracker flagged as delayed: per line totals and the list."""
         need_history()
+        days = min(days, cta.history.retention_days)
         return _json({"days": days, "lines": cta.history.delay_summary(days),
                       "delays": cta.history.delays(days, route or None)})
 

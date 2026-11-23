@@ -3,6 +3,9 @@
 (function () {
   "use strict";
 
+  // A route colour for a style attribute: only #rgb/#rrggbb, anything else grey.
+  const cssColor = (c) => (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(String(c || "")) ? c : "#888888");
+
   const SETTINGS_KEY = "metra.map";
   const DEFAULTS = {
     basemap: "auto",       // auto | light | dark | simple | satellite
@@ -490,7 +493,7 @@
     }
     function styleTrainEl(el, t) {
       const rot = t.bearing == null ? null : `${t.bearing}deg`;
-      el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 360 ? " late" : ""}" style="--c:${t.color}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
+      el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 360 ? " late" : ""}" style="--c:${cssColor(t.color)}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
     }
 
     // ---- one line in focus (Map tab chips / tapping a line) -------------------

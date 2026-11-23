@@ -11,6 +11,9 @@ from .tracker_helpers import SNAP_MAX_M, STALE_VEHICLE_SECONDS
 from .tracker_stations import StationQueries
 from .util import StaticJson
 
+# Segments either side of a train's last snapped segment searched first.
+SNAP_WINDOW = 40
+
 
 class MapQueries(StationQueries):
     def trains(self, now: float | None = None, to: str | None = None, frm: str | None = None) -> dict:
@@ -101,19 +104,39 @@ class MapQueries(StationQueries):
         if not shape or len(shape) < 2:
             return lat, lon, 0
         coslat = math.cos(math.radians(lat))
+
+        def nearest(lo: int, hi: int):
+            """(distance², lat, lon, segment) of the nearest point on segments lo..hi-1."""
+            best = None
+            for i in range(lo, hi):
+                (alat, alon), (blat, blon) = shape[i], shape[i + 1]
+                ax, ay = (alon - lon) * 111320 * coslat, (alat - lat) * 110540
+                bx, by = (blon - lon) * 111320 * coslat, (blat - lat) * 110540
+                dx, dy = bx - ax, by - ay
+                seg2 = dx * dx + dy * dy
+                f = 0.0 if seg2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / seg2))
+                px, py = ax + f * dx, ay + f * dy
+                d2 = px * px + py * py
+                if best is None or d2 < best[0]:
+                    best = (d2, alat + f * (blat - alat), alon + f * (blon - alon), i)
+            return best
+
+        # A train moves a little between polls: look near where it was last time
+        # first, and only check the whole track if it isn't there.
+        n = len(shape) - 1
+        hint = self._snap_hints.get(trip_id or "")
         best = None
-        for (alat, alon), (blat, blon) in zip(shape, shape[1:]):
-            ax, ay = (alon - lon) * 111320 * coslat, (alat - lat) * 110540
-            bx, by = (blon - lon) * 111320 * coslat, (blat - lat) * 110540
-            dx, dy = bx - ax, by - ay
-            seg2 = dx * dx + dy * dy
-            f = 0.0 if seg2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / seg2))
-            px, py = ax + f * dx, ay + f * dy
-            d2 = px * px + py * py
-            if best is None or d2 < best[0]:
-                best = (d2, alat + f * (blat - alat), alon + f * (blon - alon))
+        if hint is not None and hint < n:
+            best = nearest(max(0, hint - SNAP_WINDOW), min(n, hint + SNAP_WINDOW + 1))
+            if best is not None and best[0] > SNAP_MAX_M ** 2:
+                best = None
+        if best is None:
+            best = nearest(0, n)
         if best is None or best[0] > SNAP_MAX_M ** 2:
             return lat, lon, 0
+        if len(self._snap_hints) > 2000:
+            self._snap_hints.clear()
+        self._snap_hints[trip_id or ""] = best[3]
         return best[1], best[2], round(math.sqrt(best[0]))
 
     def _live_trains(self, now: float) -> list[dict]:

@@ -62,7 +62,7 @@ Over the first days and weeks:
 - [ ] A small history page with charts (per-train on-time trend, worst days).
 - [ ] Store train positions in history too (currently predictions, cancellations and alerts only).
 - [x] Update GitHub Actions versions to clear the "Node.js 20 is deprecated" warning.
-- [ ] Run the container as a non-root user (Unraid's 99:100).
+- [x] Run the container as a non-root user (Unraid's 99:100): the entrypoint switches to `PUID:PGID`.
 - [ ] Shrink old history: full detail for 90 days, then daily summaries (about 1 GB/year → tens of MB).
 
 ## Done

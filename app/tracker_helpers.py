@@ -142,6 +142,12 @@ def _is_delay_alert(a: rtp.AlertInfo) -> bool:
 
 @dataclass
 class _TripRT:
-    """Realtime info for one static trip, indexed for fast lookup."""
+    """Realtime info for one static trip, indexed for fast lookup.
+
+    `index`: (stop sequences, stop updates) for the updates with a known stop
+    sequence, in sequence order (equal sequences keep the feed's order), so the
+    latest update at or before a stop is a binary search. Built on first use,
+    set in one assignment (request threads may read it meanwhile)."""
     update: rtp.TripUpdateInfo
     service_date: date | None
+    index: tuple[list[int], list[rtp.StopUpdate]] | None = None

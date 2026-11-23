@@ -41,6 +41,7 @@
     const title = `Last ${h.days} days, ${dayWord[h.day_type] || h.day_type} around this time. On time = no wait more than twice the scheduled gap.`;
     return `<div class="cta-hist" title="${esc(title)}">${parts.join(" · ")}</div>`;
   }
+  // Run numbers come straight from Train Tracker: escape them wherever they go into HTML.
   const tripId = (run) => `cta:${run}`;
   // A scheduled train that isn't running yet (no run number): which group, a station it
   // calls at, when, and its sign. Its sheet comes from the schedule (/api/cta/planned).
@@ -219,11 +220,11 @@
       const x = g.trains[0];
       const arrives = (t) => (t.arrives ? ` · arrives ${esc(host.fmtTime(t.arrives))}` : "");
       // "Then": time · destination, like Metra's.
-      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${tripId(t.run)}" data-route="${esc(g.route_id)}"` : ""}><b>${esc(host.fmtTime(t.time))}</b> · ${esc(t.destination || g.label)}</button>`).join("");
+      const later = g.trains.slice(1).map((t) => `<button type="button" class="lc-pill${t.delayed ? " late" : ""}${sel === tripId(t.run) ? " selected" : ""}"${t.run ? ` data-trip="${esc(tripId(t.run))}" data-route="${esc(g.route_id)}"` : ""}><b>${esc(host.fmtTime(t.time))}</b> · ${esc(t.destination || g.label)}</button>`).join("");
       const dest = g.destinations.length > 1 ? x.destination : g.label;
       return `<li class="lc cta-lc${sel && sel === tripId(x.run) ? " selected" : ""}" style="--line:${esc(g.color)}">
         <div class="lc-top">${host.chip(g.route_short, g.color, g.text_color)}<span class="lc-name">${esc(g.route_name)}</span><span class="lc-dir">${esc(DIR[g.direction] || g.platform || "")}</span></div>
-        <button type="button" class="lc-next"${x.run ? ` data-trip="${tripId(x.run)}" data-route="${esc(g.route_id)}"` : ""} title="Show this train on the map">
+        <button type="button" class="lc-next"${x.run ? ` data-trip="${esc(tripId(x.run))}" data-route="${esc(g.route_id)}"` : ""} title="Show this train on the map">
           <span class="lc-time">${host.bigTime(x.time)}</span>
           <span class="lc-main"><span class="lc-dest">${esc(dest)}</span>
             <span class="lc-status">${badge(x)}${x.run ? ` <span class="muted">#${esc(x.run)}</span>` : ""}${arrives(x)}</span></span>
@@ -252,7 +253,7 @@
       const status = r.delayed ? '<span class="badge cancel" title="CTA says this train is delayed">Delayed</span>'
         : r.live ? '<span class="badge live">Live</span>' : '<span class="badge sched">Scheduled</span>';
       const beyond = r.destination && r.destination !== to ? `<span class="beyond" title="Continues to ${esc(r.destination)}">→ ${esc(r.destination)}</span>` : "";
-      return `<li class="dep cta-dep${trip && sel === trip ? " selected" : ""}" style="--line:${esc(g.color)}"${trip ? ` data-trip="${trip}" data-route="${esc(g.route_id)}" tabindex="0" role="button" title="Show this train on the map"` : ""}>
+      return `<li class="dep cta-dep${trip && sel === trip ? " selected" : ""}" style="--line:${esc(g.color)}"${trip ? ` data-trip="${esc(trip)}" data-route="${esc(g.route_id)}" tabindex="0" role="button" title="Show this train on the map"` : ""}>
         <div class="timecol"><div class="time">${host.bigTime(r.time)}</div></div>
         <div class="main"><div class="dest arr-head">${r.arrives ? `Arrives <b>${esc(host.fmtTime(r.arrives))}</b> <span class="trip">· ${ride} min</span>` : esc(r.destination || g.label)}</div>
           <div class="meta">${host.chip(g.route_short, g.color, g.text_color)} ${status}${r.run ? ` <span class="muted">#${esc(r.run)}</span>` : ""}${beyond}</div></div>
@@ -428,7 +429,7 @@
         const status = r.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
           : r.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : "";
         const arr = r.final_arrival ? `arrives <b>${esc(host.fmtTime(r.final_arrival))}</b>` : "";
-        const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"`
+        const trip = r.run ? ` data-trip="${esc(tripId(r.run))}" data-route="${esc(r.route_id)}"`
           : plannedAttr(plannedId(r.key, st.station, r.time, r.destination));
         html.push(`<li class="lt-row${r === next ? " next" : ""}${r.run && sel === tripId(r.run) ? " selected" : ""}"${trip}>
           <span class="lt-time">${host.bigTime(r.time)}</span>
@@ -559,7 +560,7 @@
   }
   async function saveProfile(values, what) {
     try {
-      const r = await fetch("/api/cta/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
+      const r = await host.putJson("/api/cta/settings", values);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
       st.profile = await r.json();
       host.toast(`CTA ${what} saved`);

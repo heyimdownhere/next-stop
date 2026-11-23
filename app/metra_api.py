@@ -234,6 +234,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
 
     @r.get("/schedule")
     def schedule(
+        request: Request,
         route: str = Query(..., min_length=1),
         direction: str = Query(..., description="inbound (to Chicago) or outbound"),
         day: str = Query("weekday", description="weekday, saturday or sunday"),
@@ -244,7 +245,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         if d is None:
             raise HTTPException(400, "direction is required")
         try:
-            return _json(tracker.line_schedule(route, d, day))
+            return tracker.line_schedule_json(route, d, day).response(request)
         except KeyError as exc:
             raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
         except ValueError:
@@ -423,6 +424,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         """On-time performance at a station, per scheduled departure."""
         need_history()
         need_schedule()
+        days = min(days, tracker.history.retention_days)  # nothing older is kept
         try:
             stop_ids = tracker.station_stops(station)
         except KeyError:
@@ -439,6 +441,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
     @r.get("/history/alerts")
     def history_alerts(days: int = Query(30, ge=1, le=3650)):
         need_history()
+        days = min(days, tracker.history.retention_days)
         return _json(tracker.history.alerts(days))
 
     @r.get("/history/export.csv")

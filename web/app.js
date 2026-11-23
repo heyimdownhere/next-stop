@@ -89,6 +89,25 @@
     el.addEventListener("animationend", () => el.classList.remove("fade-in"), { once: true });
   }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // Only http(s) links from the transit agencies' alerts become links.
+  const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u.trim()) ? u.trim() : null);
+
+  // Changing settings. If the server has an ADMIN_TOKEN, ask for it once and keep it on this device.
+  const TOKEN_KEY = "nextstop.adminToken";
+  async function putJson(path, values) {
+    const send = () => fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": localStorage.getItem(TOKEN_KEY) || "" },
+      body: JSON.stringify(values),
+    });
+    let r = await send();
+    if (r.status === 401) {
+      const token = prompt("This server needs its admin token (ADMIN_TOKEN) to change settings:");
+      if (token) { localStorage.setItem(TOKEN_KEY, token.trim()); r = await send(); }
+    }
+    if (r.status === 401) localStorage.removeItem(TOKEN_KEY);
+    return r;
+  }
 
   async function api(path) {
     const r = await fetch(path, { cache: "no-store" });
@@ -665,9 +684,7 @@
 
   async function saveProfile(values, what) {
     try {
-      const r = await fetch("/api/settings", {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
-      });
+      const r = await putJson("/api/settings", values);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
       state.home = await r.json();
       if (!$("settings-page").hidden) fillSettings();
@@ -1786,7 +1803,7 @@
       <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}${a.schedule_change ? ' <span class="badge schedchg">Schedule change</span>' : ""}</div>
       <h3>${esc(a.header)}</h3>
       ${a.description && a.description !== a.header ? `<p>${esc(a.description)}</p>` : ""}
-      ${a.url ? `<p><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">More info</a></p>` : ""}
+      ${safeUrl(a.url) ? `<p><a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">More info</a></p>` : ""}
     </li>`;
     const listHtml = mine.map(item).join("")
       + (other.length && mine.length ? '<li class="alerts-divider">Other lines</li>' : "")
@@ -2019,7 +2036,7 @@
     workStation: () => state.home && state.home.work_station,
   });
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
+    api, esc, chip, enter, toast, putJson, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
     boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),
     hidePickers: () => $("hide-pickers-btn").click(),
     setupCardHtml: (hasHome) => setupCardHtml("cta", hasHome), mapView, applyView, showEmpty, renderMapHead,

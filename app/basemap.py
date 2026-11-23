@@ -69,6 +69,10 @@ PREFETCH_ASSETS = [
     *(f"sprites/v4/{f}{s}.{e}" for f in ("light", "dark") for s in ("", "@2x") for e in ("json", "png")),
 ]
 
+# Seconds between checks that the map file wasn't replaced (a page of tiles is
+# dozens of requests a second; one check covers them all).
+STAT_EVERY = 1.0
+
 GAP_MERGE = 256 * 1024        # merge tile reads separated by less than this
 MAX_BATCH = 16 * 1024 * 1024  # bytes per range request
 
@@ -304,6 +308,7 @@ class BaseMap:
         self._lock = threading.Lock()
         self._archive: _Archive | None = None
         self._archive_lock = threading.Lock()
+        self._checked_at = 0.0
         self._info: dict | None = None
         self._asset_failed = TTLCache(ASSET_RETRY_SECONDS, max_items=1024)
 
@@ -365,6 +370,7 @@ class BaseMap:
                     "source": url, "downloaded_at": time.time(), "bbox": self.bbox, **summary,
                 }, indent=2).encode())
                 self._info = None
+                self._checked_at = 0.0  # serve the new file from the next request
                 log.info("Map: saved %.1f MB (%d tiles, %d requests) in %.0fs",
                          summary["size"] / 1e6, summary["tiles"], src.requests, time.monotonic() - started)
                 self._prefetch_assets(client)
@@ -390,11 +396,15 @@ class BaseMap:
         reference and finishes normally; the old file is closed when the last
         such request is done.
         """
+        archive = self._archive
+        now = time.monotonic()
+        if archive is not None and now - self._checked_at < STAT_EVERY:
+            return archive  # the file was checked a moment ago
         try:
             stamp = self.path.stat().st_mtime_ns
         except OSError:
             return None
-        archive = self._archive
+        self._checked_at = now
         if archive is None or archive.stamp != stamp:
             with self._archive_lock:
                 archive = self._archive

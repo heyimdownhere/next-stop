@@ -43,6 +43,18 @@ class FakeClient:
         self.zip_gets += 1
         return httpx.Response(200, content=self.content, request=httpx.Request("GET", url))
 
+    def stream(self, method, url, **kw):
+        client = self
+
+        class _Stream:
+            async def __aenter__(self):
+                return await client.get(url, **kw)
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Stream()
+
 
 def _tracker(tmp_path, client, days=7) -> Tracker:
     s = Settings(api_token=None, config_dir=tmp_path, static_url="zip", published_url="pub",

@@ -11,9 +11,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PGID=100 \
     TZ=America/Chicago
 
+# Debian's security fixes released since the base image was built.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY requirements.txt requirements-lock.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -c requirements-lock.txt
+COPY requirements-lock.txt ./
+# Every package file's hash is checked against the lock: a file replaced on PyPI can't get in.
+# pip itself is then removed: the app never uses it, and it carries its own copies of
+# other libraries (urllib3, msgpack, setuptools) that security scans flag.
+RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt \
+ && pip uninstall -y pip
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY app ./app

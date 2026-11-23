@@ -1,6 +1,7 @@
 """What the history databases have in common: one SQLite file under /config,
-opened once, with a schema version, a write lock, and exports that are read
-in batches and capped in size.
+opened once, with a schema version, a write lock, reads on their own
+connection (so they never wait for recording, or hold it up), exports that are
+read in batches and capped in size, and upkeep that gives deleted space back.
 """
 
 from __future__ import annotations
@@ -22,8 +23,11 @@ class SqliteStore:
     def __init__(self, path: Path, retention_days: int):
         self.path = path
         self.retention_days = retention_days
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()        # the writer connection
+        self._read_lock = threading.Lock()   # the reader connection
         self._db: sqlite3.Connection | None = None
+        self._reader: sqlite3.Connection | None = None
+        self._compacted = False
 
     @property
     def enabled(self) -> bool:
@@ -39,6 +43,7 @@ class SqliteStore:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        db.execute("PRAGMA busy_timeout=10000")
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=NORMAL")
         version = db.execute("PRAGMA user_version").fetchone()[0]
@@ -50,6 +55,9 @@ class SqliteStore:
         db.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         db.row_factory = sqlite3.Row
         self._db = db
+        # WAL lets this connection read while the other one writes.
+        self._reader = self._read_only()
+        self._reader.execute("PRAGMA busy_timeout=10000")
         log.info("%s database at %s (retention %d days)", self.LABEL, self.path, self.retention_days)
 
     def _migrate(self, db: sqlite3.Connection, version: int) -> None:
@@ -57,6 +65,10 @@ class SqliteStore:
         raise NotImplementedError
 
     def close(self) -> None:
+        with self._read_lock:
+            if self._reader:
+                self._reader.close()
+                self._reader = None
         with self._lock:
             if self._db:
                 self._db.close()
@@ -64,10 +76,40 @@ class SqliteStore:
 
     # ---- helpers for subclasses -------------------------------------------------------
     def _query(self, sql: str, params: tuple = ()) -> list[dict]:
-        if not self._db:
+        """Rows as dicts, read on the reader connection (recording isn't held up)."""
+        if not self._reader:
             return []
+        with self._read_lock:
+            return [dict(r) for r in self._reader.execute(sql, params).fetchall()]
+
+    def _query_one(self, sql: str, params: tuple = ()) -> tuple:
+        if not self._reader:
+            return ()
+        with self._read_lock:
+            return tuple(self._reader.execute(sql, params).fetchone() or ())
+
+    def maintain(self) -> None:
+        """Upkeep after pruning: give the space of deleted rows back to the disk
+        (incremental auto-vacuum), and keep the query planner's statistics fresh.
+
+        A database made before this has auto-vacuum off; switching it on needs
+        one full VACUUM (a one-off that rewrites the file and needs as much free
+        space again). If that fails it's tried again at the next prune."""
+        if not self._db:
+            return
         with self._lock:
-            return [dict(r) for r in self._db.execute(sql, params).fetchall()]
+            try:
+                mode = self._db.execute("PRAGMA auto_vacuum").fetchone()[0]
+                if mode != 2 and not self._compacted:
+                    log.info("%s: switching on incremental space reuse (one-off VACUUM of %s)", self.LABEL, self.path.name)
+                    self._db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                    self._db.execute("VACUUM")
+                    self._compacted = True
+                else:
+                    self._db.execute("PRAGMA incremental_vacuum")
+                self._db.execute("PRAGMA optimize")
+            except sqlite3.Error as exc:
+                log.warning("%s upkeep failed (%s); trying again later", self.LABEL, exc)
 
     def _write_many(self, sql: str, rows: list[tuple]) -> None:
         """All rows or none."""

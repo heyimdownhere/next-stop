@@ -140,8 +140,7 @@ class History(SqliteStore):
              json.dumps(a.route_ids), now, now)
             for a in alerts
         ]
-        with self._lock:
-            self._db.executemany(UPSERT_ALERT, params)
+        self._write_many(UPSERT_ALERT, params)  # one commit for the whole poll
 
     def prune(self) -> int:
         if not self._db:
@@ -152,6 +151,7 @@ class History(SqliteStore):
             n += self._db.execute("DELETE FROM alerts_log WHERE last_seen < ?", (cutoff,)).rowcount
         if n:
             log.info("Pruned %d history rows older than %d days", n, self.retention_days)
+        self.maintain()
         return n
 
     # ---- reads ----------------------------------------------------------
@@ -216,20 +216,26 @@ class History(SqliteStore):
                             (int(since), int(until)), limit)
 
     def stats(self) -> dict:
-        """Row counts and size. Cached for a few minutes."""
+        """Row counts and size, for /api/status (asked every minute). Cached for a
+        few minutes, and cheap anyway: `observations` is worked out from the row
+        ids (an index lookup, not a count of a year of rows), so it's approximate."""
         if not self._db:
             return {"enabled": False}
         cached = self._stats_cache.get("stats")
         if cached is not None:
             return cached
-        with self._lock:
-            n = self._db.execute("SELECT COUNT(*), MIN(scheduled) FROM stop_observations").fetchone()
-            a = self._db.execute("SELECT COUNT(*) FROM alerts_log").fetchone()
+        # Two queries on purpose: SQLite answers MIN or MAX of the row id from the
+        # end of the table, but not both in one query (that reads every row).
+        top = self._query_one("SELECT MAX(rowid) FROM stop_observations")
+        bottom = self._query_one("SELECT MIN(rowid) FROM stop_observations")
+        span = (top[0] - bottom[0] + 1,) if top and bottom and top[0] is not None else ()
+        oldest = self._query_one("SELECT MIN(scheduled) FROM stop_observations")
+        alerts = self._query_one("SELECT COUNT(*) FROM alerts_log")
         return self._stats_cache.put("stats", {
             "enabled": True,
             "retention_days": self.retention_days,
-            "observations": n[0],
-            "oldest": n[1],
-            "alerts": a[0],
+            "observations": (span[0] if span else None) or 0,
+            "oldest": oldest[0] if oldest else None,
+            "alerts": alerts[0] if alerts else 0,
             "size_bytes": self.size_bytes(),
         })

@@ -11,16 +11,17 @@ import asyncio
 import csv
 import hashlib
 import io
-import json
 import logging
 import os
 import pickle
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
-from fastapi import Request
+import orjson
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 USER_AGENT = "next-stop/1.0 (self-hosted)"
@@ -57,7 +58,37 @@ def mask(secret: str | None, unset: str) -> str:
     """How a secret is shown in the startup log: never the value itself."""
     if not secret:
         return unset
-    return f"set ({len(secret)} chars, ends …{secret[-4:]})" if len(secret) > 8 else "set"
+    return f"set ({len(secret)} chars)"
+
+
+# ---- values from outside feeds that end up in the page ------------------------------
+_HEX_COLOR = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def hex_color(value: str | None, default: str) -> str:
+    """A colour from a schedule as '#RRGGBB', or `default` if it isn't one.
+    Colours go into style attributes in the page, so nothing else gets through."""
+    m = _HEX_COLOR.fullmatch((value or "").strip())
+    return "#" + m.group(1).upper() if m else default
+
+
+def safe_url(value: str | None) -> str | None:
+    """An http(s) link from a transit agency, or None. Keeps javascript: and
+    other schemes out of the page's links."""
+    v = (value or "").strip()
+    return v if re.match(r"https?://", v, re.IGNORECASE) else None
+
+
+# Unpacked size a schedule zip may have. CTA's whole feed (buses included) is
+# well under 1 GB; anything bigger is a broken or hostile file.
+MAX_UNZIPPED = 1024 * 1024 * 1024
+
+
+def check_zip_size(zf, limit: int = MAX_UNZIPPED) -> None:
+    """Refuse a zip that would unpack to more than `limit` bytes (a zip bomb)."""
+    total = sum(i.file_size for i in zf.infolist())
+    if total > limit:
+        raise ValueError(f"it would unpack to {total >> 20} MB (limit {limit >> 20} MB)")
 
 
 class _AllowListUnpickler(pickle.Unpickler):
@@ -202,9 +233,18 @@ def install_redaction() -> None:
 
 
 # ---- responses ---------------------------------------------------------------------
+class FastJSONResponse(JSONResponse):
+    """JSONResponse written with orjson: several times faster for the big
+    answers (timetables, a line's trains, every train on the map). Keys that
+    aren't strings are turned into strings, as the standard library does."""
+
+    def render(self, content: Any) -> bytes:
+        return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS)
+
+
 def json_response(data: Any, status: int = 200, headers: dict | None = None) -> JSONResponse:
     """JSON that browsers don't keep (live data), unless other headers are given."""
-    return JSONResponse(data, status_code=status, headers=headers or NO_STORE)
+    return FastJSONResponse(data, status_code=status, headers=headers or NO_STORE)
 
 
 class StaticJson:
@@ -215,7 +255,7 @@ class StaticJson:
     """
 
     def __init__(self, data: Any, headers: dict | None = None):
-        self.body = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode()
+        self.body = orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS)
         self.etag = 'W/"' + hashlib.sha1(self.body).hexdigest()[:20] + '"'
         self.headers = {"Cache-Control": "no-cache", "ETag": self.etag, **(headers or {})}
 
@@ -226,21 +266,49 @@ class StaticJson:
         return Response(self.body, media_type="application/json", headers=self.headers)
 
 
+# CSV exports read a lot of rows: at most this many run at once.
+EXPORT_SLOTS = threading.BoundedSemaphore(2)
+
+
+class _Slot:
+    """One export's place, given back once (when the download ends, or when
+    it's dropped without ever starting)."""
+
+    def __init__(self, sem: threading.BoundedSemaphore):
+        self.sem, self.held = sem, True
+
+    def release(self) -> None:
+        if self.held:
+            self.held = False
+            self.sem.release()
+
+    __del__ = release
+
+
 def csv_response(filename: str, columns: list[str], rows: Iterable[dict],
-                 headers: dict | None = None) -> StreamingResponse:
-    """Stream rows as a CSV download, a chunk at a time."""
+                 headers: dict | None = None,
+                 slots: threading.BoundedSemaphore | None = EXPORT_SLOTS) -> StreamingResponse:
+    """Stream rows as a CSV download, a chunk at a time. Refused (429) while
+    the other export slots are in use."""
+    if slots is not None and not slots.acquire(blocking=False):
+        raise HTTPException(429, "Other exports are running. Try again when they finish.")
+    slot = _Slot(slots) if slots is not None else None
 
     def gen():
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(columns)
-        for row in rows:
-            w.writerow([row[c] for c in columns])
-            if buf.tell() > 65536:
-                yield buf.getvalue()
-                buf.seek(0)
-                buf.truncate()
-        yield buf.getvalue()
+        try:
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(columns)
+            for row in rows:
+                w.writerow([row[c] for c in columns])
+                if buf.tell() > 65536:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+            yield buf.getvalue()
+        finally:
+            if slot is not None:
+                slot.release()
 
     return StreamingResponse(gen(), media_type="text/csv", headers={
         "Content-Disposition": f'attachment; filename="{filename}"', **NO_STORE, **(headers or {})})

@@ -16,13 +16,23 @@ from .tracker_helpers import (
     BOARD_HISTORY_DAYS, BOARD_HISTORY_MIN_OBS, DEPARTURE_LOOKBACK_SECONDS, SameStation, WrongDirection, _status, is_schedule_change,
 )
 from .tracker_map import MapQueries
+from .util import StaticJson
 
 log = logging.getLogger(__name__)
 
+# How far ahead boards look for departures: first SHORT_HORIZON, then FULL_HORIZON
+# if that isn't enough. EARLY_MARGIN allows for a train running a little early.
+SHORT_HORIZON = 3 * 3600
+FULL_HORIZON = 36 * 3600
+EARLY_MARGIN = 15 * 60
+
 
 class BoardQueries(MapQueries):
-    def _iter_departures(self, stop_ids: list[str], now: float):
-        """Yield (trip_id, stop_id, seq, base, sched, effective, pred) for upcoming departures."""
+    def _iter_departures(self, stop_ids: list[str], now: float, horizon: float = FULL_HORIZON,
+                         until: float | None = None):
+        """Yield (trip_id, stop_id, seq, base, sched, effective, pred) for departures
+        scheduled from DEPARTURE_LOOKBACK_SECONDS ago up to `horizon` seconds ahead
+        (and before `until`)."""
         s = self.static
         lookback = DEPARTURE_LOOKBACK_SECONDS  # catch very late trains
         seen: set[tuple[str, date]] = set()
@@ -30,7 +40,9 @@ class BoardQueries(MapQueries):
             base = s.service_day_start(d)
             services = s.active_services(d)
             lo = now - base - lookback
-            hi = now - base + 36 * 3600
+            hi = now - base + horizon
+            if until is not None:
+                hi = min(hi, until - base)
             for stop_id in stop_ids:
                 deps = s.stop_departures.get(stop_id, [])
                 i = bisect_left(deps, (int(lo), "", 0))
@@ -175,25 +187,16 @@ class BoardQueries(MapQueries):
             if not dest:
                 raise KeyError(to)
 
-        # Cheap filters first; full rows (predictions, final-stop ETA, alert
-        # lookup) are only built for the trains we actually return.
-        candidates = []
-        for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
-            if until is not None and sched >= until:
-                continue
-            if route and s.trips[trip_id][T_ROUTE] != route:
-                continue
-            if direction:
-                last = s.trip_stops[trip_id][-1][S_STOP]
-                if self._direction(stop_id, last) != direction:
-                    continue
-            arrival = None
-            if dest is not None:
-                arrival = self._arrival(trip_id, seq, base, dest, pred)
-                if arrival is None:
-                    continue
-            candidates.append((effective, trip_id, stop_id, base, sched, pred, arrival))
-        candidates.sort(key=lambda c: c[0])
+        # Most boards want the next few trains: look a few hours ahead first, and
+        # only look further (up to 36 h, for late at night or a rarely served stop)
+        # if that didn't find enough, or if the last train found leaves so close to
+        # the end of the window that a train just after it could be running early.
+        if until is not None:
+            candidates = self._candidates(stop_ids, now, FULL_HORIZON, until, route, direction, dest)
+        else:
+            candidates = self._candidates(stop_ids, now, SHORT_HORIZON, None, route, direction, dest)
+            if len(candidates) < limit or candidates[limit - 1][0] > now + SHORT_HORIZON - EARLY_MARGIN:
+                candidates = self._candidates(stop_ids, now, FULL_HORIZON, None, route, direction, dest)
 
         rows = []
         stats = self._board_history(stop_ids)
@@ -222,6 +225,31 @@ class BoardQueries(MapQueries):
             "generated_at": now,
             "realtime": self.realtime_live,
         }
+
+    def _candidates(self, stop_ids: list[str], now: float, horizon: float, until: float | None,
+                    route: str | None, direction: str | None, dest: set[str] | None) -> list[tuple]:
+        """Departures that pass the filters, soonest (by expected time) first.
+        Cheap filters first; full rows (final-stop ETA, alert lookup) are only
+        built later, for the trains returned."""
+        s = self.static
+        candidates = []
+        for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now, horizon, until):
+            if until is not None and sched >= until:
+                continue
+            if route and s.trips[trip_id][T_ROUTE] != route:
+                continue
+            if direction:
+                last = s.trip_stops[trip_id][-1][S_STOP]
+                if self._direction(stop_id, last) != direction:
+                    continue
+            arrival = None
+            if dest is not None:
+                arrival = self._arrival(trip_id, seq, base, dest, pred)
+                if arrival is None:
+                    continue
+            candidates.append((effective, trip_id, stop_id, base, sched, pred, arrival))
+        candidates.sort(key=lambda c: c[0])
+        return candidates
 
     # ---- on-time history for the board -------------------------------------
     def _board_history(self, stop_ids: list[str]) -> dict:
@@ -571,8 +599,8 @@ class BoardQueries(MapQueries):
         d = next(today + timedelta(days=i) for i in range(7) if (today + timedelta(days=i)).weekday() in want)
         services = s.active_services(d)
         runs = []
-        for trip_id, trip in s.trips.items():
-            if trip[T_ROUTE] != route or trip[T_SERVICE] not in services:
+        for trip_id, trip in self._route_trips().get(route, []):
+            if trip[T_SERVICE] not in services:
                 continue
             sts = s.trip_stops.get(trip_id)
             if not sts or self._direction(sts[0][S_STOP], sts[-1][S_STOP]) != direction:
@@ -606,8 +634,33 @@ class BoardQueries(MapQueries):
                 "color": r.get("color"), "text_color": r.get("text_color"), "direction": direction, "day": day,
                 "date": d.isoformat(), "service_day_start": s.service_day_start(d), "today": d == today,
                 "stations": [{"id": stop, "name": s.stop_name(stop) or stop} for stop in order],
-                "trains": [t for _, t in trains], "server_time": now,
-                "schedule_version": s.version}
+                "trains": [t for _, t in trains], "schedule_version": s.version}
+
+    def line_schedule_json(self, route: str, direction: str, day: str = "weekday",
+                           now: float | None = None) -> StaticJson:
+        """line_schedule as ready-made JSON with an ETag. It only changes with the
+        schedule and the service day, so it's built once per (line, direction,
+        kind of day, service day) and schedule."""
+        now = time.time() if now is None else now
+        memo: dict = self._once("schedule_json", dict)
+        key = (route, direction, day, self.static.local_date(now - 3 * 3600))
+        hit = memo.get(key)
+        if hit is None:
+            built = StaticJson(self.line_schedule(route, direction, day, now))  # raises for a bad route/day
+            if len(memo) > 256:
+                memo.clear()
+            hit = memo[key] = built
+        return hit
+
+    def _route_trips(self) -> dict[str, list[tuple[str, tuple]]]:
+        """route -> [(trip_id, trip)], built once per schedule (instead of going
+        through every trip in the schedule to find one line's)."""
+        def build() -> dict[str, list[tuple[str, tuple]]]:
+            out: dict[str, list[tuple[str, tuple]]] = {}
+            for trip_id, trip in self.static.trips.items():
+                out.setdefault(trip[T_ROUTE], []).append((trip_id, trip))
+            return out
+        return self._once("route_trips", build)
 
     def line_trains(self, route: str, direction: str | None = None, now: float | None = None, limit: int = 60) -> dict:
         """Every train on one line still to run today in one direction (running ones first).
@@ -627,8 +680,8 @@ class BoardQueries(MapQueries):
         for d in s.candidate_service_dates(now):
             base = s.service_day_start(d)
             services = s.active_services(d)
-            for trip_id, trip in s.trips.items():
-                if trip[T_ROUTE] != route or trip[T_SERVICE] not in services or (trip_id, d) in seen:
+            for trip_id, trip in self._route_trips().get(route, []):
+                if trip[T_SERVICE] not in services or (trip_id, d) in seen:
                     continue
                 span = s.trip_spans.get(trip_id)
                 sts = s.trip_stops.get(trip_id)
