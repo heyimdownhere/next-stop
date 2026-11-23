@@ -152,6 +152,8 @@ class Settings:
     allowed_hosts: tuple[str, ...] = ()
     # If set, changing settings (PUT) needs this token. See README "Security".
     admin_token: str | None = None
+    # Spam protection: API requests a minute per client (IP address); 0 = off.
+    client_requests_per_minute: int = 600
     # Most rows one CSV export may return.
     export_max_rows: int = 250_000
     warnings: tuple[str, ...] = field(default=(), compare=False)
@@ -189,6 +191,7 @@ class Settings:
             f"  CTA_HISTORY_DAYS      {self.cta_history_days}" + (" (CTA history off)" if self.cta_history_days == 0 else ""),
             f"  ALLOWED_HOSTS         {self.hosts_summary()}",
             f"  ADMIN_TOKEN           {mask(self.admin_token, 'not set (anyone on the network can change settings)')}",
+            f"  CLIENT_REQUESTS_PER_MINUTE {self.client_requests_per_minute or 'off'}",
             f"  EXPORT_MAX_ROWS       {self.export_max_rows}",
             f"  LOG_LEVEL             {self.log_level}",
         ]
@@ -263,5 +266,6 @@ def load_settings() -> Settings:
         allowed_hosts=hosts,
         admin_token=read_secret("ADMIN_TOKEN", warnings, "settings can be changed without a token"),
         export_max_rows=_int_env("EXPORT_MAX_ROWS", 250_000, 1_000, 5_000_000, warnings),
+        client_requests_per_minute=_int_env("CLIENT_REQUESTS_PER_MINUTE", 600, 0, 100_000, warnings),
         warnings=tuple(warnings),
     )

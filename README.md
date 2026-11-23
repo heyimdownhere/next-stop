@@ -197,6 +197,7 @@ The app has no login: anyone who can reach the port can read your home and work 
 - **Keys** are never written to the log (the settings summary only says whether each is set, and its length).
 - **The page** is only allowed to run this server's own scripts, can't be shown inside another site (no framing), and links from alerts are only followed if they're ordinary web links. The schedule cache can only hold schedule data, and downloaded schedules are size-checked before they're opened.
 - Settings changes are limited to 64 KB and checked before anything is saved. At most two CSV exports run at once.
+- **Spam protection:** each device may make up to `CLIENT_REQUESTS_PER_MINUTE` API requests a minute (600, in bursts of up to 120). The app itself makes about 7 when it opens and 3 every 30 seconds, so this only stops something hitting the server over and over; it gets "429 Too many requests" until it slows down. Map tiles and the app's files don't count. If the app sits behind a reverse proxy, all devices may share the proxy's address and so one allowance: raise the number, or set `0` to turn it off.
 - **The image** installs only package files whose hashes match `requirements-lock.txt`. CI checks those packages and the built image for known vulnerabilities before publishing.
 
 ### docker compose
@@ -263,6 +264,7 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
 | `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
 | `ALLOWED_HOSTS` | *(empty)* | Host names the app answers to, comma-separated (see "Security"). Empty = IP addresses, `localhost` and `*.ts.net` names only; `*` = any name. |
+| `CLIENT_REQUESTS_PER_MINUTE` | `600` | Spam protection: API requests a minute per device (see "Security"). `0` turns it off. |
 | `ADMIN_TOKEN` | *(empty)* | If set, changing settings needs this token (see "Security"). Or `ADMIN_TOKEN_FILE`. |
 | `PUID` / `PGID` | `99` / `100` | User and group the app runs as inside the container (see "Security"). |
 | `EXPORT_MAX_ROWS` | `250000` | Most rows one CSV export returns (1,000–5,000,000). See "Exports". |

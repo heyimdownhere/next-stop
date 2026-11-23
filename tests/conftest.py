@@ -6,3 +6,6 @@ import os
 # (IP addresses, localhost, *.ts.net) would refuse. test_security.py checks
 # the host check itself.
 os.environ.setdefault("ALLOWED_HOSTS", "*")
+# The shared app is hit by many tests in a row from one address; test_security.py
+# checks the spam limit on its own apps.
+os.environ.setdefault("CLIENT_REQUESTS_PER_MINUTE", "0")

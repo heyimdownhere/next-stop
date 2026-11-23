@@ -11,6 +11,7 @@ import ipaddress
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -327,5 +328,57 @@ class AdminToken:
             await self.app(scope, receive, send)
             return
         start, body = _plain_response(401, "This server needs its admin token to change settings.")
+        await send(start)
+        await send(body)
+
+
+class ClientLimit:
+    """Spam protection: each client (IP address) may make at most `per_minute`
+    API requests a minute, in bursts of up to a fifth of that. Beyond it,
+    requests are refused with 429 until the allowance refills.
+
+    Ordinary use never gets near it: the app's page makes about 7 requests when
+    it opens and 3 every 30 seconds after. It only stops something hitting the
+    server over and over (a stuck script, a reload loop, a flood).
+
+    Only /api/ and the map's fonts and icons count: map tiles and the app's
+    files are cheap, and one map view asks for dozens of tiles at once.
+
+    Behind a reverse proxy that this server doesn't trust for X-Forwarded-For,
+    every device shares the proxy's address and so shares one allowance.
+    """
+
+    PREFIXES = ("/api/", "/map/assets/", "/openapi.json")
+    FORGET_AFTER = 300  # seconds before an idle client's numbers are dropped
+
+    def __init__(self, app: ASGIApp, per_minute: int = 600):
+        self.app = app
+        self.rate = per_minute / 60.0
+        self.burst = max(1.0, per_minute / 5)
+        self._clients: dict[str, list[float]] = {}  # ip -> [tokens left, last seen]
+        self._checked = time.monotonic()
+
+    def allow(self, key: str, now: float) -> bool:
+        if now - self._checked > 60:  # forget clients that have gone quiet
+            self._checked = now
+            for k in [k for k, (_, seen) in self._clients.items() if now - seen > self.FORGET_AFTER]:
+                del self._clients[k]
+        c = self._clients.get(key)
+        if c is None:
+            c = self._clients[key] = [self.burst, now]
+        c[0] = min(self.burst, c[0] + (now - c[1]) * self.rate)
+        c[1] = now
+        if c[0] < 1:
+            return False
+        c[0] -= 1
+        return True
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (scope["type"] != "http" or not scope["path"].startswith(self.PREFIXES)
+                or self.allow((scope.get("client") or ("unknown",))[0], time.monotonic())):
+            await self.app(scope, receive, send)
+            return
+        start, body = _plain_response(429, "Too many requests. Slow down and try again in a moment.",
+                                      [(b"retry-after", b"1")])
         await send(start)
         await send(body)

@@ -30,7 +30,7 @@ from .systems import System
 from .tracker import Tracker
 from .user_settings import UserSettings
 from .util import FastJSONResponse, install_redaction, json_response
-from .web import WEB_DIR, AdminToken, BodyLimit, HostCheck, IndexPage, SecurityHeaders, WebFiles, docs_security_policy
+from .web import WEB_DIR, AdminToken, BodyLimit, ClientLimit, HostCheck, IndexPage, SecurityHeaders, WebFiles, docs_security_policy
 
 log = logging.getLogger("metra")
 
@@ -102,6 +102,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(BodyLimit, max_bytes=64 * 1024)
     if settings.admin_token:
         app.add_middleware(AdminToken, token=settings.admin_token)
+    if settings.client_requests_per_minute:
+        app.add_middleware(ClientLimit, per_minute=settings.client_requests_per_minute)
     app.add_middleware(SecurityHeaders)
     # The health check inside the container asks for 127.0.0.1, which is always allowed.
     app.add_middleware(HostCheck, allowed=settings.allowed_hosts)

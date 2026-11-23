@@ -150,3 +150,68 @@ def test_metra_schedule_download_is_capped(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="larger than"):
         asyncio.run(t._download_schedule())
     assert not t.cache.new_zip.exists()
+
+
+# ---- spam protection ---------------------------------------------------------------------
+async def _call(mw, path="/api/departures", ip="10.0.0.2"):
+    sent = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    async def send(m):
+        sent.append(m)
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    mw.app = app
+    await mw({"type": "http", "path": path, "client": (ip, 1234), "headers": []}, receive, send)
+    return sent[0]["status"]
+
+
+def test_repeated_hits_are_refused_then_allowed_again(monkeypatch):
+    import app.web as web
+    clock = [1000.0]
+    monkeypatch.setattr(web.time, "monotonic", lambda: clock[0])
+
+    async def go():
+        mw = web.ClientLimit(None, per_minute=60)               # 1 a second, bursts of 12
+        assert [await _call(mw) for _ in range(12)] == [200] * 12
+        assert await _call(mw) == 429
+        assert await _call(mw, ip="10.0.0.9") == 200            # someone else's allowance
+        clock[0] += 3                                            # 3 s later: 3 more
+        assert [await _call(mw) for _ in range(4)] == [200, 200, 200, 429]
+        clock[0] += 400                                          # quiet clients are forgotten
+        assert await _call(mw, ip="10.0.0.7") == 200
+        assert set(mw._clients) == {"10.0.0.7"}
+    asyncio.run(go())
+
+
+def test_tiles_and_app_files_are_not_counted():
+    async def go():
+        from app.web import ClientLimit
+        mw = ClientLimit(None, per_minute=5)
+        paths = ["/map/tiles/7/32/47.mvt"] * 50 + ["/app.js", "/", "/vendor/x/y.js"]
+        assert [await _call(mw, path=p) for p in paths] == [200] * len(paths)
+        assert mw._clients == {}
+    asyncio.run(go())
+
+
+def test_the_normal_app_never_gets_near_the_default():
+    async def go():
+        from app.web import ClientLimit
+        mw = ClientLimit(None)                                   # 600 a minute
+        # Opening the app in five tabs at once, about 7 requests each.
+        assert [await _call(mw) for _ in range(35)] == [200] * 35
+    asyncio.run(go())
+
+
+def test_the_app_wires_in_the_limit(tmp_path):
+    c = TestClient(_app(tmp_path, allowed_hosts=("*",), client_requests_per_minute=10))  # bursts of 2
+    assert [c.get("/api/systems").status_code for _ in range(3)] == [200, 200, 429]
+    assert c.get("/api/systems").headers["retry-after"] == "1"
+    assert c.get("/app.js").status_code == 200
+    off = TestClient(_app(tmp_path, allowed_hosts=("*",), client_requests_per_minute=0))
+    assert {off.get("/api/systems").status_code for _ in range(50)} == {200}
