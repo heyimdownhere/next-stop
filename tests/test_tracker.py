@@ -228,8 +228,10 @@ def test_next_trains_to_a_station_with_live_times(tracker):
     assert first["arrival"] and first["duration_min"] == 40
     assert not second["live"] and second["source"] == "scheduled"
     assert n["message"].startswith("Alpha \u2192 Central: 8:05 AM (5 min late)")
-    assert tracker.next_trains("B", to="A", now=NOW)["trains"] == []  # nothing runs that way
-    with pytest.raises(ValueError):
+    back = tracker.next_trains("B", to="A", now=NOW)  # nothing runs that way
+    assert back["trains"] == [] and back["message"] == "No upcoming trains Bravo \u2192 Alpha."
+    from app.tracker import SameStation
+    with pytest.raises(SameStation):
         tracker.next_trains("A", to="alpha", now=NOW)
     with pytest.raises(KeyError):
         tracker.next_trains("A", to="Nowhere", now=NOW)

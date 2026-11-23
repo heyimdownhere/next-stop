@@ -13,7 +13,7 @@ from . import realtime as rtp
 from .history import day_type
 from .static_gtfs import S_ARR, S_DEP, S_SEQ, S_STOP, T_ROUTE, T_SERVICE, T_SHORT_NAME
 from .tracker_helpers import (
-    BOARD_HISTORY_DAYS, BOARD_HISTORY_MIN_OBS, DEPARTURE_LOOKBACK_SECONDS, _status, is_schedule_change,
+    BOARD_HISTORY_DAYS, BOARD_HISTORY_MIN_OBS, DEPARTURE_LOOKBACK_SECONDS, SameStation, _status, is_schedule_change,
 )
 from .tracker_map import MapQueries
 
@@ -325,7 +325,7 @@ class BoardQueries(MapQueries):
         station_id = self.find_station(station)
         to_id = self.find_destination(to) if to else None
         if to_id is not None and to_id == station_id:
-            raise ValueError("to is the same station")
+            raise SameStation(to)
         board = self.departures(station_id, limit, now=now, direction=direction, to=to_id)
         trains = [self._api_train(r, now) for r in board["departures"]]
         parts = [self._summary_part(r, t["status"], with_destination=to_id is None)
@@ -333,15 +333,17 @@ class BoardQueries(MapQueries):
         nxt = next((t for t in trains if not t["cancelled"]), None)
         name = board["station"]["name"]
         label = {"inbound": " toward downtown", "outbound": " away from downtown"}.get(direction or "", "")
+        empty = f"No upcoming trains at {name}{label}."
         if to_id is not None:
             label = f" \u2192 {board['to']['name']}"
+            empty = f"No upcoming trains {name}{label}."
         out = {
             "station": board["station"],
             "direction": direction or "both",
             "trains": trains,
             "next_departure": nxt["departure"] if nxt else None,
             "next_minutes": nxt["minutes_until"] if nxt else None,
-            "message": (f"{name}{label}: " + ", ".join(parts)) if parts else f"No upcoming trains at {name}{label}.",
+            "message": (f"{name}{label}: " + ", ".join(parts)) if parts else empty,
             "realtime": board["realtime"],
             "generated_at": self._iso(now),
         }

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .commute import SettingsChange, clean_changes, commute_leg
 from .config import Settings
-from .tracker import AmbiguousStation, Tracker, normalize_direction
+from .tracker import AmbiguousStation, SameStation, Tracker, normalize_direction
 from .user_settings import UserSettings
 from .util import NO_STORE, csv_response, json_response as _json
 
@@ -322,7 +322,7 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
             return ambiguous(exc)
         except KeyError as exc:
             raise HTTPException(404, f"Unknown station {exc.args[0]!r}. See /api/stations for ids.")
-        except ValueError:
+        except SameStation:
             raise HTTPException(400, "station and to are the same station")
 
     @r.get("/commute", response_model=Commute, response_model_exclude_unset=True, response_model_by_alias=True)
@@ -336,7 +336,10 @@ def make_router(tracker: Tracker, commute: MetraCommute, settings: Settings) -> 
         need_schedule()
         response.headers.update(NO_STORE)
         try:
-            return tracker.commute(tracker.find_station(from_), tracker.find_destination(to), limit)
+            from_id, to_id = tracker.find_station(from_), tracker.find_destination(to)
+            if from_id == to_id:
+                raise HTTPException(400, "from and to are the same station")
+            return tracker.commute(from_id, to_id, limit)
         except AmbiguousStation as exc:
             return ambiguous(exc)
         except KeyError as exc:

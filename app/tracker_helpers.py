@@ -58,6 +58,10 @@ class AmbiguousStation(KeyError):
         self.options = options
 
 
+class SameStation(ValueError):
+    """A trip asked for from a station to itself."""
+
+
 def _norm_name(x: str) -> str:
     return re.sub(r"[^a-z0-9]", "", x.lower())
 
