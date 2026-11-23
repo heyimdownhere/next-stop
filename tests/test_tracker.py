@@ -672,6 +672,7 @@ def test_env_settings_parsing_and_warnings(tmp_path, monkeypatch):
                  "REALTIME_INTERVAL": "5", "HISTORY_DAYS": "abc", "LOG_LEVEL": "loud",
                  "WORK_DAYS": "mon,wed", "COMMUTE_SWITCH_TIME": "13:30", "HOME_STATION": "Evanston"}.items():
         monkeypatch.setenv(k, v)
+    monkeypatch.delenv("ALLOWED_HOSTS", raising=False)
     s = load_settings()
     assert s.api_token == "abcd1234wxyz" and s.port == 9090 and s.host == "127.0.0.1"
     assert s.realtime_interval == 30            # clamped to Metra's minimum
@@ -679,7 +680,7 @@ def test_env_settings_parsing_and_warnings(tmp_path, monkeypatch):
     assert s.work_days == (0, 2) and s.commute_switch_time == "13:30" and s.home_station == "Evanston"
     assert len(s.warnings) == 3                 # interval, history days, log level
     summary = s.summary()
-    assert "abcd1234wxyz" not in summary and "…wxyz" in summary
+    assert "abcd1234wxyz" not in summary and "wxyz" not in summary and "set (12 chars)" in summary
     monkeypatch.setenv("METRA_API_TOKEN", "direct-token-value")   # the variable wins over the file
     assert load_settings().api_token == "direct-token-value"
 
@@ -952,3 +953,92 @@ def test_schedule_endpoint(tracker, tmp_path, monkeypatch):
     assert c.get("/api/schedule?route=L1&direction=sideways").status_code == 400
     assert c.get("/api/schedule?route=L1&direction=inbound&day=holiday").status_code == 400
     assert c.get("/api/schedule?route=NOPE&direction=inbound").status_code == 404
+
+
+# ---- speed changes give the same answers ------------------------------------
+
+def test_short_look_ahead_finds_the_same_trains_as_the_full_36_hours(tracker):
+    from app.tracker_boards import FULL_HORIZON
+    # A big delay on the 8:00 pushes it behind later trains; the 8:30 runs a bit early.
+    _apply(tracker, updates=[_tu("t-0800", [("A", 50 * 60)]), _tu("t-0830", [("A", -120)])])
+    for minutes in range(0, 48 * 60, 7):
+        now = NOW - 8 * 3600 + minutes * 60
+        for station, limit, to in (("A", 1, None), ("A", 3, None), ("A", 2, "C"), ("B", 5, None)):
+            got = [(r["trip_id"], r["time"]) for r in tracker.departures(station, limit, now=now, to=to)["departures"]]
+            dest = set(tracker.static.station_children.get(to) or [to]) if to else None
+            full = tracker._candidates(tracker._station_stops(station), now, FULL_HORIZON, None, None, None, dest)
+            assert got == [(c[1], c[0]) for c in full[:limit]], (station, limit, to, minutes)
+
+
+def test_predictions_from_the_sorted_index_match_a_plain_scan(tracker):
+    import random
+
+    from app.static_gtfs import S_DEP, S_SEQ
+
+    rnd = random.Random(7)
+    s = tracker.static
+    for _ in range(40):
+        stus = [(rnd.choice(["A", "B", "C", "X"]), rnd.randint(-120, 900)) for _ in range(rnd.randint(0, 5))]
+        _apply(tracker, updates=[_tu("t-0800", stus)])
+        info = tracker._rt_by_trip["t-0800"]
+        seq_by_stop, _ = s.trip_index("t-0800")
+        base = s.service_day_start(TODAY)
+        for x in s.trip_stops["t-0800"]:
+            # The old way: the last update (in feed order) at or before this stop.
+            best = None
+            for stu in info.update.stop_updates:
+                sseq = stu.stop_sequence if stu.stop_sequence is not None else seq_by_stop.get(stu.stop_id or "")
+                if sseq is not None and sseq <= x[S_SEQ] and (best is None or sseq >= best[0]):
+                    best = (sseq, stu)
+            pred = tracker._predict("t-0800", x[S_SEQ], base)
+            if best is None:
+                assert pred is None
+            else:
+                d = best[1].departure_delay
+                assert pred is not None and pred["delay"] == d and pred["time"] == base + x[S_DEP] + d
+
+
+def test_station_lookup_index_gives_the_same_answers(tracker):
+    from app.tracker_helpers import STATION_ALIASES, AmbiguousStation, _norm_name
+
+    def old_find(query, partial):  # the lookup as it was before the name index
+        s = tracker.static
+        if query in s.station_children:
+            return query
+        q = _norm_name(query)
+        stations = list(s.station_children)
+        for sid in stations:
+            if _norm_name(sid) == q:
+                return sid
+        if STATION_ALIASES.get(q) in s.station_children:
+            return STATION_ALIASES[q]
+        labelled = [sid for sid in stations if _norm_name(tracker.station_label(sid)) == q]
+        if len(labelled) == 1:
+            return labelled[0]
+        exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
+        matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        if not matches and partial and len(q) >= 3:
+            matches = [sid for sid in stations if q in _norm_name(s.stops[sid]["name"])]
+        if len(matches) == 1:
+            return matches[0]
+        return ("many", tuple(sorted(matches))) if matches else None
+
+    def new_find(query, partial):
+        try:
+            return tracker.find_station(query, partial)
+        except AmbiguousStation as exc:
+            return ("many", tuple(o["id"] for o in exc.options))
+        except KeyError:
+            return None
+
+    for q in ("A", "a", "Alpha", "alp", "ravo", "bravo", "Central", "entr", "nope", "", "x"):
+        for partial in (False, True):
+            assert new_find(q, partial) == old_find(q, partial), (q, partial)
+    assert new_find("alp", False) == "A" and new_find("ravo", True) == "B"
+
+
+def test_line_schedule_json_is_built_once_per_service_day(tracker):
+    a = tracker.line_schedule_json("L1", "inbound", "weekday", now=NOW)
+    assert tracker.line_schedule_json("L1", "inbound", "weekday", now=NOW + 3600) is a
+    assert tracker.line_schedule_json("L1", "inbound", "weekday", now=NOW + 86400) is not a
+    assert b'"server_time"' not in a.body

@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .util import atomic_write, load_cache_file
+from .util import atomic_write, check_zip_size, hex_color, load_cache_file
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +168,8 @@ class CtaSchedule:
 def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
     """Read the L (route_type 1) out of CTA's schedule zip. Buses are skipped."""
     with zipfile.ZipFile(path) as zf:
+        check_zip_size(zf)
+
         def rows(name: str):
             with zf.open(name) as fh:
                 yield from csv.DictReader(io.TextIOWrapper(fh, "utf-8-sig"))
@@ -179,8 +181,8 @@ def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
                 lines[rid] = {
                     "id": rid, "short_name": SHORT_NAMES.get(rid, rid),
                     "name": r.get("route_long_name", "").strip() or rid,
-                    "color": "#" + (r.get("route_color", "").strip() or "565a5c"),
-                    "text_color": "#" + (r.get("route_text_color", "").strip() or "ffffff"),
+                    "color": hex_color(r.get("route_color"), "#565A5C"),
+                    "text_color": hex_color(r.get("route_text_color"), "#FFFFFF"),
                 }
         trips = {}
         for r in rows("trips.txt"):
@@ -346,6 +348,9 @@ class CtaCache:
             return None
         if not isinstance(data, CtaSchedule) or getattr(data, "schema", None) != SCHEMA:
             return None
+        for line in data.lines.values():  # caches written before colours were checked
+            line["color"] = hex_color(line.get("color"), "#565A5C")
+            line["text_color"] = hex_color(line.get("text_color"), "#FFFFFF")
         return data
 
     def save(self, data: CtaSchedule) -> None:

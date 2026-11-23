@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from bisect import bisect_right
 import logging
 import math
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx2 as httpx
@@ -24,9 +26,12 @@ from .tracker_helpers import (
     DELAY_EFFECTS, GPS_AT_STATION_M, GPS_MAX_OFF_ROUTE_M, STALE_VEHICLE_SECONDS,
     TRIP_OVER_AFTER_SECONDS, _is_delay_alert, _TripRT, is_schedule_change,
 )
-from .util import USER_AGENT
+from .util import USER_AGENT, safe_url
 
 log = logging.getLogger(__name__)
+
+# Metra's schedule zip is a few MB; refuse anything absurd.
+MAX_DOWNLOAD = 200 * 1024 * 1024
 
 
 class TrackerCore:
@@ -48,6 +53,8 @@ class TrackerCore:
         self._client: httpx.AsyncClient | None = None
         self._static_lock = asyncio.Lock()
         self._trains_cache: tuple[float, dict] | None = None
+        # trip_id -> shape segment its train was last drawn on (tracker_map._snap_to_shape).
+        self._snap_hints: dict[str, int] = {}
         # Monotonic time of the last realtime poll. Metra allows at most one
         # request per feed every 30 seconds; refresh_realtime enforces it.
         self._last_rt_poll: float | None = None
@@ -70,6 +77,7 @@ class TrackerCore:
         self._static = data
         self._derived = {}
         self._trains_cache = None
+        self._snap_hints = {}
 
     def _once(self, name: str, build: Callable[[], Any]) -> Any:
         """Something worked out from the schedule: built on first use, kept
@@ -177,20 +185,18 @@ class TrackerCore:
                 self.static_error = None
                 return False
             log.info("Downloading static GTFS (published: %s, have: %s)", published, current)
-            r = await self._client.get(self.settings.static_url)
-            r.raise_for_status()
-            content = r.content
-            unchanged: bool = bool(self.static) and await asyncio.to_thread(self.cache.same_as_current, content)
+            staged, digest = await self._download_schedule()
+            unchanged: bool = bool(self.static) and await asyncio.to_thread(self.cache.staged_same_as_current)
             if unchanged:
+                await asyncio.to_thread(self.cache.discard_staged)
                 await asyncio.to_thread(self.cache.mark_checked)
                 log.info("Schedule unchanged (%s)", current)
                 self.static_error = None
                 return False
-            version = published or "sha256:" + hashlib.sha256(content).hexdigest()[:16]
+            version = published or "sha256:" + digest[:16]
             if self.static and version == current:
                 # Same published.txt but different contents: Metra changed it silently.
-                version = f"{version} (sha256:{hashlib.sha256(content).hexdigest()[:8]})"
-            staged = await asyncio.to_thread(self.cache.stage, content)
+                version = f"{version} (sha256:{digest[:8]})"
             try:
                 data = await asyncio.to_thread(parse_gtfs_zip, staged, version)
                 problem = check_usable(data, data.local_date(time.time()))
@@ -209,9 +215,30 @@ class TrackerCore:
             log.info("Now using schedule %s (previous kept as backup: %s)", version, current)
             self.static = data
             self.static_error = None
-            self._reindex_realtime()
-            self._gps = self._gps_estimates(time.time())
+            await asyncio.to_thread(self._reindex_realtime)
+            self._gps = await asyncio.to_thread(self._gps_estimates, time.time())
             return True
+
+    async def _download_schedule(self) -> tuple[Path, str]:
+        """Stream the schedule zip to the staging file (never whole into memory),
+        refusing anything over MAX_DOWNLOAD. Returns (path, sha256 hex)."""
+        assert self._client
+        self.cache.ensure_dir()
+        sha, size = hashlib.sha256(), 0
+        try:
+            async with self._client.stream("GET", self.settings.static_url) as r:
+                r.raise_for_status()
+                with self.cache.new_zip.open("wb") as fh:
+                    async for chunk in r.aiter_bytes(1 << 16):
+                        size += len(chunk)
+                        if size > MAX_DOWNLOAD:
+                            raise ValueError(f"the schedule download is larger than {MAX_DOWNLOAD >> 20} MB")
+                        sha.update(chunk)
+                        fh.write(chunk)
+        except BaseException:
+            self.cache.discard_staged()
+            raise
+        return self.cache.new_zip, sha.hexdigest()
 
     # ---- realtime feed ---------------------------------------------------
     async def _realtime_loop(self) -> None:
@@ -236,6 +263,8 @@ class TrackerCore:
             r = await self._client.get(
                 f"{self.settings.realtime_base}/{name}",
                 headers={"Authorization": f"Bearer {self.settings.api_token}"},
+                # The token must only ever go to Metra's feed address, not wherever a redirect points.
+                follow_redirects=False,
             )
             if r.status_code in (401, 403):
                 raise RuntimeError(f"HTTP {r.status_code}: token rejected")
@@ -267,18 +296,12 @@ class TrackerCore:
         positions, updates, alerts = await asyncio.gather(
             *(self._fetch_feed(f) for f in rtp.FEEDS)
         )
-        if positions is not None:
-            self.rt.vehicles = rtp.parse_positions(positions)
-        if updates is not None:
-            self.rt.trip_updates = rtp.parse_trip_updates(updates)
-        if alerts is not None:
-            self.rt.alerts = rtp.parse_alerts(alerts)
-        self._trains_cache = None
-        self._reindex_realtime()
-        self._gps = self._gps_estimates(time.time())
+        # Reading the feeds and working out every train's state is a few tens of
+        # milliseconds of pure Python: done in a worker thread, so requests
+        # aren't held up meanwhile.
+        rows = await asyncio.to_thread(self._apply_feeds, positions, updates, alerts)
         if self.history.available:
             try:
-                rows = self._observation_rows(time.time()) if updates is not None else []
                 await asyncio.to_thread(self.history.record_observations, self._changed_rows(rows))
                 self._recorded = {r[:3]: r[3:] for r in rows}
                 if alerts is not None:
@@ -286,6 +309,26 @@ class TrackerCore:
             except Exception:
                 log.exception("Recording history failed")
         return True
+
+    def _apply_feeds(self, positions, updates, alerts) -> list[tuple]:
+        """Take in a poll's feeds (None = that feed failed: keep the last good one).
+        Runs in a worker thread. Everything is parsed first and then swapped in
+        together, so a request sees the old state or the new one. Returns the
+        history rows for this poll (empty without new trip updates)."""
+        vehicles = rtp.parse_positions(positions) if positions is not None else self.rt.vehicles
+        trip_updates = rtp.parse_trip_updates(updates) if updates is not None else self.rt.trip_updates
+        alert_list = rtp.parse_alerts(alerts) if alerts is not None else self.rt.alerts
+        self.rt.vehicles, self.rt.trip_updates, self.rt.alerts = vehicles, trip_updates, alert_list
+        self._trains_cache = None
+        self._reindex_realtime()
+        self._gps = self._gps_estimates(time.time())
+        if updates is None or not self.history.available:
+            return []
+        try:
+            return self._observation_rows(time.time())
+        except Exception:
+            log.exception("Working out history rows failed")
+            return []
 
     def _changed_rows(self, rows: list[tuple]) -> list[tuple]:
         """The rows that differ from what was last written. Most predictions
@@ -419,15 +462,23 @@ class TrackerCore:
         if tu.trip.relationship == rtp.TRIP_CANCELED:
             return {"time": None, "delay": None, "skipped": False, "cancelled": True}
         seq_by_stop, sched_by_seq = static.trip_index(trip_id)
+        index = info.index
+        if index is None:
+            # Each stop update with its stop sequence, in order (sorted() is stable,
+            # so of two updates for one stop the feed's later one stays last).
+            known = []
+            for stu in tu.stop_updates:
+                sseq = stu.stop_sequence if stu.stop_sequence is not None else seq_by_stop.get(stu.stop_id or "")
+                if sseq is not None:
+                    known.append((sseq, stu))
+            known.sort(key=lambda x: x[0])
+            index = info.index = ([x[0] for x in known], [x[1] for x in known])
+        seqs, stus = index
 
-        best: rtp.StopUpdate | None = None
-        best_seq = None
-        for stu in tu.stop_updates:
-            sseq = stu.stop_sequence if stu.stop_sequence is not None else seq_by_stop.get(stu.stop_id or "")
-            if sseq is None or sseq > seq:
-                continue
-            if best_seq is None or sseq >= best_seq:
-                best, best_seq = stu, sseq
+        # The latest update at or before this stop.
+        i = bisect_right(seqs, seq) - 1
+        best: rtp.StopUpdate | None = stus[i] if i >= 0 else None
+        best_seq = seqs[i] if i >= 0 else None
 
         target = sched_by_seq.get(seq)
         if target is None:
@@ -579,7 +630,7 @@ class TrackerCore:
                 "id": a.id,
                 "header": a.header or a.description[:140],
                 "description": a.description,
-                "url": a.url,
+                "url": safe_url(a.url),
                 "cause": a.cause,
                 "effect": a.effect,
                 "schedule_change": is_schedule_change(a),

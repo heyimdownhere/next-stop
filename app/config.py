@@ -147,8 +147,11 @@ class Settings:
     cta_static_url: str = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
     cta_static_check_hours: int = 24
     cta_history_days: int = 90
-    # Host names the app answers to (empty = any). See README "Security".
+    # Host names the app answers to. Empty = IP addresses, localhost and Tailscale
+    # (*.ts.net) names only; "*" = any name. See README "Security".
     allowed_hosts: tuple[str, ...] = ()
+    # If set, changing settings (PUT) needs this token. See README "Security".
+    admin_token: str | None = None
     # Most rows one CSV export may return.
     export_max_rows: int = 250_000
     warnings: tuple[str, ...] = field(default=(), compare=False)
@@ -156,6 +159,13 @@ class Settings:
     @property
     def realtime_enabled(self) -> bool:
         return bool(self.api_token)
+
+    def hosts_summary(self) -> str:
+        if "*" in self.allowed_hosts:
+            return "* (any name: DNS rebinding protection off)"
+        if not self.allowed_hosts:
+            return "(not set: IP addresses, localhost and *.ts.net names only)"
+        return ", ".join(self.allowed_hosts)
 
     def summary(self) -> str:
         """Human-readable settings for the startup log. Never prints the token."""
@@ -177,7 +187,8 @@ class Settings:
             f"  CTA_ENABLED           {'on' if self.cta_enabled else 'off'}",
             f"  CTA_TRAIN_TRACKER_KEY {mask(self.cta_api_key, 'not set (CTA schedule only)')}",
             f"  CTA_HISTORY_DAYS      {self.cta_history_days}" + (" (CTA history off)" if self.cta_history_days == 0 else ""),
-            f"  ALLOWED_HOSTS         {', '.join(self.allowed_hosts) or '(any)'}",
+            f"  ALLOWED_HOSTS         {self.hosts_summary()}",
+            f"  ADMIN_TOKEN           {mask(self.admin_token, 'not set (anyone on the network can change settings)')}",
             f"  EXPORT_MAX_ROWS       {self.export_max_rows}",
             f"  LOG_LEVEL             {self.log_level}",
         ]
@@ -207,6 +218,9 @@ def load_settings() -> Settings:
         except ValueError:
             warnings.append(f"MAP_BBOX={bbox_raw!r} isn't min_lon,min_lat,max_lon,max_lat; using the Metra area")
     hosts = tuple(h.strip().lower() for h in (_str_env("ALLOWED_HOSTS") or "").split(",") if h.strip())
+    if "*" in hosts:
+        warnings.append("ALLOWED_HOSTS=* accepts any host name, so a web page you visit could reach the app "
+                        "through DNS rebinding. List the names you use instead.")
     level = (_str_env("LOG_LEVEL", "INFO") or "INFO").upper()
     if level not in VALID_LOG_LEVELS:
         warnings.append(f"LOG_LEVEL={level!r} is not one of {', '.join(VALID_LOG_LEVELS)}; using INFO")
@@ -247,6 +261,7 @@ def load_settings() -> Settings:
         # from HISTORY_DAYS because the L makes about five times as many rows a day.
         cta_history_days=_int_env("CTA_HISTORY_DAYS", 90, 0, 3650, warnings),
         allowed_hosts=hosts,
+        admin_token=read_secret("ADMIN_TOKEN", warnings, "settings can be changed without a token"),
         export_max_rows=_int_env("EXPORT_MAX_ROWS", 250_000, 1_000, 5_000_000, warnings),
         warnings=tuple(warnings),
     )

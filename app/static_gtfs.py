@@ -18,10 +18,12 @@ import zipfile
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
+from typing import Iterator
 from zoneinfo import ZoneInfo
 
-from .util import atomic_write, load_cache_file
+from .util import atomic_write, check_zip_size, hex_color, load_cache_file
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,14 @@ CACHE_VERSION = 4  # bump when StaticData's fields change
 T_ROUTE, T_SERVICE, T_HEADSIGN, T_SHAPE, T_DIRECTION, T_SHORT_NAME = range(6)
 # Trip-stop tuple field indexes.
 S_SEQ, S_STOP, S_ARR, S_DEP, S_PICKUP, S_DROPOFF = range(6)
+
+
+@lru_cache(maxsize=8)
+def _zone(name: str) -> ZoneInfo:
+    """The time zone object, looked up once (StaticData.tz is used constantly).
+    Not stored on StaticData itself: the pickled schedule cache may only hold
+    plain data (see util.load_cache_file)."""
+    return ZoneInfo(name)
 
 
 def _parse_time(value: str) -> int | None:
@@ -56,24 +66,22 @@ def _parse_date(value: str) -> date | None:
         return None
 
 
-def _read_csv(zf: zipfile.ZipFile, name: str) -> list[dict[str, str]]:
-    """Read a GTFS table, tolerating whitespace around headers and values."""
+def _read_csv(zf: zipfile.ZipFile, name: str) -> Iterator[dict[str, str]]:
+    """Read a GTFS table row by row, tolerating whitespace around headers and values."""
     names = {Path(n).name: n for n in zf.namelist()}
     if name not in names:
-        return []
+        return
     with zf.open(names[name]) as raw:
         text = io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
         reader = csv.reader(text, skipinitialspace=True)
         try:
             header = [h.strip() for h in next(reader)]
         except StopIteration:
-            return []
-        rows = []
+            return
         for row in reader:
             if not row or all(not c.strip() for c in row):
                 continue
-            rows.append({header[i]: row[i].strip() for i in range(min(len(header), len(row)))})
-        return rows
+            yield {header[i]: row[i].strip() for i in range(min(len(header), len(row)))}
 
 
 # Abbreviations whose trailing period is part of the name ("Main St.").
@@ -138,7 +146,7 @@ class StaticData:
     # ---- time helpers -------------------------------------------------
     @property
     def tz(self) -> ZoneInfo:
-        return ZoneInfo(self.timezone)
+        return _zone(self.timezone)
 
     def service_day_start(self, d: date) -> float:
         """Epoch seconds of 'noon minus 12h' on service date d (GTFS definition)."""
@@ -302,14 +310,20 @@ def _bearing(p1: tuple[float, float], p2: tuple[float, float]) -> float | None:
 def parse_gtfs_zip(path: Path, version: str) -> StaticData:
     started = time.monotonic()
     with zipfile.ZipFile(path) as zf:
-        agency = _read_csv(zf, "agency.txt")
-        routes_rows = _read_csv(zf, "routes.txt")
-        stops_rows = _read_csv(zf, "stops.txt")
-        trips_rows = _read_csv(zf, "trips.txt")
-        st_rows = _read_csv(zf, "stop_times.txt")
-        cal_rows = _read_csv(zf, "calendar.txt")
-        cd_rows = _read_csv(zf, "calendar_dates.txt")
-        shape_rows = _read_csv(zf, "shapes.txt")
+        check_zip_size(zf)
+        return _parse_tables(zf, version, started)
+
+
+def _parse_tables(zf: zipfile.ZipFile, version: str, started: float) -> StaticData:
+    # The big tables (stop_times, shapes) are read row by row, never whole into memory.
+    agency = list(_read_csv(zf, "agency.txt"))
+    routes_rows = _read_csv(zf, "routes.txt")
+    stops_rows = _read_csv(zf, "stops.txt")
+    trips_rows = _read_csv(zf, "trips.txt")
+    st_rows = _read_csv(zf, "stop_times.txt")
+    cal_rows = _read_csv(zf, "calendar.txt")
+    cd_rows = _read_csv(zf, "calendar_dates.txt")
+    shape_rows = _read_csv(zf, "shapes.txt")
 
     tz = (agency[0].get("agency_timezone") if agency else None) or "America/Chicago"
     agency_name = (agency[0].get("agency_name") if agency else None) or "Metra"
@@ -319,14 +333,12 @@ def parse_gtfs_zip(path: Path, version: str) -> StaticData:
         rid = r.get("route_id", "")
         if not rid:
             continue
-        color = (r.get("route_color") or "").lstrip("#") or "888888"
-        text = (r.get("route_text_color") or "").lstrip("#") or "FFFFFF"
         routes[rid] = {
             "id": rid,
             "short_name": r.get("route_short_name") or rid,
             "long_name": r.get("route_long_name") or r.get("route_short_name") or rid,
-            "color": "#" + color.upper(),
-            "text_color": "#" + text.upper(),
+            "color": hex_color(r.get("route_color"), "#888888"),
+            "text_color": hex_color(r.get("route_text_color"), "#FFFFFF"),
             "url": r.get("route_url") or None,
         }
 
@@ -468,6 +480,13 @@ def parse_gtfs_zip(path: Path, version: str) -> StaticData:
     return data
 
 
+def _clean_colors(data: StaticData) -> None:
+    """Colours in a cache written before they were checked: make them '#RRGGBB'."""
+    for r in data.routes.values():
+        r["color"] = hex_color(r.get("color"), "#888888")
+        r["text_color"] = hex_color(r.get("text_color"), "#FFFFFF")
+
+
 def _fill_missing_times(sts: list[tuple]) -> None:
     """Linearly interpolate stop times left blank (non-timepoints)."""
     n = len(sts)
@@ -521,6 +540,7 @@ class StaticCache:
             payload = load_cache_file(self.pickle_path, [StaticData])
             if isinstance(payload, dict) and payload.get("cache_version") == CACHE_VERSION:
                 data: StaticData = payload["data"]
+                _clean_colors(data)
                 log.info("Loaded cached static GTFS %s from %s", data.version, self.pickle_path)
                 return data
         except FileNotFoundError:
@@ -552,9 +572,18 @@ class StaticCache:
         except OSError:
             return None
 
-    def same_as_current(self, content: bytes) -> bool:
+    def staged_same_as_current(self) -> bool:
+        """Whether the staged download is byte-for-byte the schedule in use."""
         try:
-            return self.zip_path.stat().st_size == len(content) and self.zip_path.read_bytes() == content
+            if self.zip_path.stat().st_size != self.new_zip.stat().st_size:
+                return False
+            with self.zip_path.open("rb") as a, self.new_zip.open("rb") as b:
+                while True:
+                    x, y = a.read(1 << 20), b.read(1 << 20)
+                    if x != y:
+                        return False
+                    if not x:
+                        return True
         except OSError:
             return False
 
@@ -564,12 +593,6 @@ class StaticCache:
             os.utime(self.zip_path)
         except OSError:
             pass
-
-    def stage(self, content: bytes) -> Path:
-        """Write a new download next to the current one, without replacing it yet."""
-        self.ensure_dir()
-        atomic_write(self.new_zip, content)
-        return self.new_zip
 
     def promote(self, version: str) -> None:
         """Make the staged download current; the old current becomes the backup."""

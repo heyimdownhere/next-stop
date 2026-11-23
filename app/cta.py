@@ -23,6 +23,7 @@ import asyncio
 import logging
 import math
 import time
+from bisect import bisect_left
 from typing import Any
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -40,7 +41,7 @@ from .cta_schedule import (  # noqa: F401
     parse_cta_time, parse_cta_zip, route_id, service_date,
 )
 from .history import day_type
-from .util import USER_AGENT, SingleFlight
+from .util import USER_AGENT, SingleFlight, safe_url
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,13 @@ PERIODS = [
 ]
 
 
+def _int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _hour(ts: float) -> int:
     return local_hour(ts)
 
@@ -93,6 +101,7 @@ class CtaTracker:
         self._meta: dict | None = None
         self._ends: dict[str, dict] = {}
         self._dirs: dict[str, dict] = {}
+        self._timetables: dict[str, dict] = {}
         self.live = TrainTracker(api_key, lambda: self._client, self.cache.dir / "budget.json")
         # History (its own database), filled by the recorder.
         self.history = CtaHistory(config_dir / "cta-history.db", history_days)
@@ -491,21 +500,50 @@ class CtaTracker:
         schedule; see timetable_live for live times), and per line and direction
         how often trains come, with the first and last train (`groups`).
 
-        `to`: only trains that go on to that station, with their arrival there."""
+        `to`: only trains that go on to that station, with their arrival there.
+        The day's schedule part is worked out once per station and service day;
+        each call only picks what's still to come."""
         now = time.time() if now is None else now
         info = self.station(station)
         if to is not None:
             self.station(to)
-        sch = self._need_schedule()
         today = datetime.fromtimestamp(now, TZ).date()
         midnight = datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp()
         # Before 3 AM the previous service day is still running.
         if now - midnight < 3 * 3600:
             today -= timedelta(days=1)
             midnight = datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp()
-        services = sch.active_services(today)
+        day = self._timetable_day(station, to, today, midnight)
         now_min = (now - midnight) / 60
-        out, rows = [], []
+        times = day["times"]
+        rows = day["rows"][bisect_left(times, now - 60):]
+        out = []
+        for g in day["groups"]:
+            periods = [{**p, "now": p["start"] <= now_min < p["end"]} for p in g["periods"]]
+            for p in periods:
+                del p["start"], p["end"]
+            out.append({**g["info"], "trains_left": len(g["mins"]) - bisect_left(g["mins"], now_min),
+                        "periods": periods})
+        return {"system": "cta", "station": info, "to": self.station(to) if to else None,
+                "service_date": today.isoformat(), "downtown": (self._loop_dist(station) or 0) <= DOWNTOWN_M,
+                "groups": out, "departures": rows, "source": "schedule", "error": None, "as_of": None,
+                "server_time": now, "credit": CREDIT}
+
+    def _timetable_day(self, station: str, to: str | None, today, midnight: float) -> dict:
+        """The schedule side of timetable() for one service day: every departure
+        (sorted, with `times` alongside for picking the ones still to come) and
+        each group's summary. Cached per schedule version; treat as read-only."""
+        sch = self._need_schedule()
+        cache = self._timetables.get(sch.version)
+        if cache is None:
+            self._timetables = {sch.version: (cache := {})}
+        key = (station, to, today)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        services = sch.active_services(today)
+        groups: list[dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for gk, by_service in sch.deps.get(station, {}).items():
             travel = self._reaches(station, gk, to)
             if travel is False:
@@ -519,21 +557,20 @@ class CtaTracker:
             ends = self._end_minutes(station, gk)
             for secs, headsign in deps:
                 t = midnight + secs
-                if t >= now - 60:
-                    end = ends.get(headsign)
-                    rows.append({"key": gk, **line, "direction": direction, "destination": headsign,
-                                 "time": t, "scheduled": t, "run": None, "live": False, "delayed": False,
-                                 "due": False, "arrival": t + travel * 60 if travel is not None else None,
-                                 "final_arrival": t + end * 60 if end is not None else None})
+                end = ends.get(headsign)
+                rows.append({"key": gk, **line, "direction": direction, "destination": headsign,
+                             "time": t, "scheduled": t, "run": None, "live": False, "delayed": False,
+                             "due": False, "arrival": t + travel * 60 if travel is not None else None,
+                             "final_arrival": t + end * 60 if end is not None else None})
             if len(deps) < 2:
                 continue
             mins = [secs / 60 for secs, _ in deps]
             gaps = [(a, b - a) for a, b in zip(mins, mins[1:])]
             periods = []
-            for key, label, start, end in PERIODS:
+            for pkey, label, start, end in PERIODS:
                 g = [round(gap) for at, gap in gaps if start <= at < end and gap <= NO_SERVICE_GAP]
-                periods.append({"key": key, "label": label, "min": min(g) if g else None,
-                                "max": max(g) if g else None, "now": start <= now_min < end})
+                periods.append({"key": pkey, "label": label, "min": min(g) if g else None,
+                                "max": max(g) if g else None, "start": start, "end": end})
             # Most frequent destination first; short trips that run a few times
             # a day (under 10% of trains) are left out of the label.
             counts: dict[str, int] = defaultdict(int)
@@ -541,21 +578,19 @@ class CtaTracker:
                 counts[h] += 1
             headsigns = [h for h in sorted(counts, key=lambda h: (-counts[h], h)) if counts[h] * 10 >= len(deps)]
             all_night = mins[0] < 60 and mins[-1] >= 24 * 60 and max(gap for _, gap in gaps) <= 60
-            upcoming = [m for m in mins if m >= now_min]
-            out.append({
+            groups.append({"mins": mins, "periods": periods, "info": {
                 "key": gk, **line, "label": " · ".join(headsigns), "direction": direction,
                 "travel_minutes": travel,
                 "first": midnight + deps[0][0], "last": midnight + deps[-1][0],
-                "all_night": all_night, "trains_left": len(upcoming), "count": len(deps),
-                "periods": periods,
-            })
+                "all_night": all_night, "count": len(deps),
+            }})
         order = {r: i for i, r in enumerate(LINE_ORDER)}
-        out.sort(key=lambda g: (order.get(g["route_id"], 99), g["label"]))
+        groups.sort(key=lambda g: (order.get(g["info"]["route_id"], 99), g["info"]["label"]))
         rows.sort(key=lambda r: r["time"])
-        return {"system": "cta", "station": info, "to": self.station(to) if to else None,
-                "service_date": today.isoformat(), "downtown": (self._loop_dist(station) or 0) <= DOWNTOWN_M,
-                "groups": out, "departures": rows, "source": "schedule", "error": None, "as_of": None,
-                "server_time": now, "credit": CREDIT}
+        if len(cache) > 512:
+            cache.clear()
+        hit = cache[key] = {"groups": groups, "rows": rows, "times": [r["time"] for r in rows]}
+        return hit
 
     async def timetable_live(self, station: str, now: float | None = None, to: str | None = None) -> dict:
         """timetable(), with Train Tracker's times for the next few trains of each
@@ -830,7 +865,7 @@ class CtaTracker:
         before = seq[:seq.index(upcoming[0])]
         tracked = {}
         if self.history.available:
-            for r in await asyncio.to_thread(self.history.run_today, service_date(now), run):
+            for r in await asyncio.to_thread(self.history.run_today, service_date(now), run, now - 3 * 3600):
                 if r["gkey"] == gk:
                     tracked[str(r["station"])] = r["t"]
         first_time = stops[0]["time"]
@@ -864,10 +899,10 @@ class CtaTracker:
             url = a.get("AlertURL")
             out.append({
                 "id": a.get("AlertId"), "headline": a.get("Headline"), "description": a.get("ShortDescription"),
-                "impact": a.get("Impact"), "severity": int(a.get("SeverityScore") or 0),
+                "impact": a.get("Impact"), "severity": _int(a.get("SeverityScore")),
                 "major": a.get("MajorAlert") == "1", "routes": routes, "stations": stations,
                 "start": parse_cta_time(a.get("EventStart")), "end": parse_cta_time(a.get("EventEnd")),
-                "url": url.get("#cdata-section") if isinstance(url, dict) else url,
+                "url": safe_url(url.get("#cdata-section") if isinstance(url, dict) else url),
             })
         out.sort(key=lambda a: -a["severity"])
         return out

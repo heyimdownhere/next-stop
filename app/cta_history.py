@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
-from .cta_schedule import local_hour, service_date, service_day_span
+from .cta_schedule import SERVICE_DAY_START, TZ, local_hour, service_date, service_day_span
 from .history import day_type
 from .sqlite_store import SqliteStore
 
@@ -163,13 +164,22 @@ class CtaHistory(SqliteStore):
             n += self._db.execute("DELETE FROM delays WHERE started < ?", (cutoff,)).rowcount
         if n:
             log.info("Pruned %d CTA history rows older than %d days", n, self.retention_days)
+        self.maintain()
         return n
 
     # ---- reads --------------------------------------------------------------------------
-    def _station_rows(self, station: str, since: float) -> list[dict]:
+    def _station_rows(self, station: str, since: float,
+                      ranges: list[tuple[float, float]] | None = None) -> list[dict]:
+        """A station's departures since a time; with `ranges`, only those inside
+        one of the (start, end) spans, so the database leaves the rest out."""
+        where, params = "a.station = ? AND a.t >= ?", [station, int(since)]
+        if ranges is not None:
+            if not ranges:
+                return []
+            where += " AND (" + " OR ".join("(a.t >= ? AND a.t < ?)" for _ in ranges) + ")"
+            params += [int(x) for span in ranges for x in span]
         rows = self._query(
-            f"SELECT g.gkey, a.t, a.gap, a.sched_gap, a.delayed FROM {ARRIVALS} WHERE a.station = ? AND a.t >= ?",
-            (station, int(since)))
+            f"SELECT g.gkey, a.t, a.gap, a.sched_gap, a.delayed FROM {ARRIVALS} WHERE {where}", tuple(params))
         for r in rows:
             r["service_date"] = service_date(r["t"])
         return rows
@@ -182,7 +192,11 @@ class CtaHistory(SqliteStore):
         data are left out."""
         now = time.time() if now is None else now
         groups: dict[str, list] = {}
-        for r in self._station_rows(station, now - days * 86400):
+        since = now - days * 86400
+        # Only the hours that can count are read: about 3 hours on each day of the
+        # right kind, instead of every departure of the last `days` days.
+        rows = self._station_rows(station, since, hour_spans(hour, kind, since, now))
+        for r in rows:
             if day_type(r["service_date"]) == kind and abs(hour_fn(r["t"]) - hour) <= 1:
                 groups.setdefault(r["gkey"], []).append(r)
         out = {}
@@ -235,9 +249,13 @@ class CtaHistory(SqliteStore):
                  "avg_minutes": round(r["total"] / r["delays"] / 60, 1) if r["delays"] else None,
                  "longest_minutes": round((r["longest"] or 0) / 60, 1)} for r in rows]
 
-    def run_today(self, day: str, run: str) -> list[dict]:
-        """Where one train has been on a service day (stations it left, in order)."""
+    def run_today(self, day: str, run: str, since: float | None = None) -> list[dict]:
+        """Where one train has been on a service day (stations it left, in order).
+        `since`: only from then on (one trip lasts at most a couple of hours, and
+        the time index then reads a few hours of rows instead of the whole day)."""
         start, end = service_day_span(day)
+        if since is not None:
+            start = max(start, since)
         return self._query(
             f"SELECT a.station, g.gkey, a.t, a.tracked FROM {ARRIVALS} "
             "WHERE a.t >= ? AND a.t < ? AND a.run = ? ORDER BY a.t",
@@ -260,6 +278,39 @@ class CtaHistory(SqliteStore):
                 yield r
 
         return info, with_date()
+
+
+def hour_spans(hour: int, kind: str, since: float, now: float) -> list[tuple[float, float]]:
+    """(start, end) epoch spans covering clock hours hour-1 .. hour+1 on every
+    service day of this kind (weekday/saturday/sunday) between since and now.
+    Wide enough to hold every row board_stats keeps; it still checks each one."""
+    hours = [h for h in (hour - 1, hour, hour + 1) if 0 <= h <= 23]
+    if not hours:
+        return []
+    first = date.fromisoformat(service_date(since))
+    last = date.fromisoformat(service_date(now))
+    raw = []
+    d = first
+    while d <= last:
+        if day_type(d.isoformat()) == kind:
+            for h in hours:
+                # Before 3 AM the clock is on the next calendar day, same service day;
+                # around a clock change the hours near 3 AM can land either way,
+                # so hours up to 3 AM are covered on both calendar days.
+                cals = [d] if h * 3600 > SERVICE_DAY_START else [d, d + timedelta(days=1)]
+                for cal in cals:
+                    start = datetime(cal.year, cal.month, cal.day, h, tzinfo=TZ).timestamp()
+                    # fold=1: the later of a repeated hour, plus that hour.
+                    end = datetime(cal.year, cal.month, cal.day, h, fold=1, tzinfo=TZ).timestamp() + 3600
+                    raw.append((max(start, since), min(end, now + 3600)))
+        d += timedelta(days=1)
+    spans: list[tuple[float, float]] = []
+    for start, end in sorted(r for r in raw if r[0] < r[1]):
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return spans
 
 
 def summarize(rows: list[dict], min_days: int = MIN_DAYS) -> dict | None:

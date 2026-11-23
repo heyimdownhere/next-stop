@@ -12,8 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=America/Chicago
 
 WORKDIR /app
-COPY requirements.txt requirements-lock.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -c requirements-lock.txt
+COPY requirements-lock.txt ./
+# Every package file's hash is checked against the lock: a file replaced on PyPI can't get in.
+RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY app ./app

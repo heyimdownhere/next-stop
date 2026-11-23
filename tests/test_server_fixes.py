@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from pmtiles.reader import MmapSource
 
 from app import cta_live
-from app.basemap import BaseMap, extract, valid_asset
+from app.basemap import STAT_EVERY, BaseMap, extract, valid_asset
 from app.cta_history import CtaHistory
 from app.history import History
 from app.util import RedactSecrets, SingleFlight, TTLCache, load_cache_file
@@ -105,6 +105,8 @@ def test_a_new_map_file_is_picked_up_and_old_readers_finish(world, tmp_path):  #
     with open(world, "rb") as f:                                # a fresh download replaces the file
         extract(MmapSource(f), bm.path, BBOX, max_zoom=6)
     assert bytes(old.tile(7, 32, 47)) == tile_before           # a request mid-read still works
+    assert bm._open() is old                                    # the file is checked at most once a second...
+    bm._checked_at -= STAT_EVERY                                # ...so a second later
     assert bm._open() is not old and bm.tile(7, 32, 47) == (None, None)
 
 

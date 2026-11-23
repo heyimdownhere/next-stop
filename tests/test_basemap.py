@@ -168,8 +168,13 @@ def test_index_links_are_versioned_and_cached():
     assert page.headers["cache-control"] == "no-cache"
     import re
     links = re.findall(r'(?:src|href)="([^"]+\.(?:m?js|css)\?v=[0-9a-f]{10})"', page.text)
-    assert any(l.startswith("app.js?v=") for l in links) and any("maplibre/global.mjs?v=" in l for l in links)
-    for link in links:
+    # Bundled libraries carry their stamp in the path, so what they load by relative
+    # address (MapLibre's modules and worker) is versioned too.
+    vendor = re.findall(r'(?:src|href)="(vendor/[a-z]+@[0-9a-f]{10}/[^"]+)"', page.text)
+    assert any(l.startswith("app.js?v=") for l in links)
+    lib = next(l for l in vendor if l.endswith("maplibre/global.mjs") or "/global.mjs" in l)
+    vendor.append(lib.replace("global.mjs", "maplibre-gl-worker.mjs"))
+    for link in links + vendor:
         r = c.get("/" + link)
         assert r.status_code == 200
         assert "immutable" in r.headers["cache-control"]

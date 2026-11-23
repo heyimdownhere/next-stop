@@ -19,7 +19,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, Response
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .basemap import BaseMap
 from .commute import commute_leg
@@ -30,8 +29,8 @@ from .metra_api import MetraCommute, make_router as make_metra_router
 from .systems import System
 from .tracker import Tracker
 from .user_settings import UserSettings
-from .util import install_redaction, json_response
-from .web import WEB_DIR, BodyLimit, IndexPage, SecurityHeaders, WebFiles
+from .util import FastJSONResponse, install_redaction, json_response
+from .web import WEB_DIR, AdminToken, BodyLimit, HostCheck, IndexPage, SecurityHeaders, WebFiles, docs_security_policy
 
 log = logging.getLogger("metra")
 
@@ -89,21 +88,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if system.enabled:
                 await system.tracker.stop()
 
-    app = FastAPI(title="Next Stop", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="Next Stop", lifespan=lifespan, docs_url=None, redoc_url=None,
+                  default_response_class=FastJSONResponse)
     app.state.settings = settings
     app.state.tracker, app.state.cta, app.state.basemap = tracker, cta, basemap
     app.state.commute, app.state.systems = commute, systems
 
-    # Outermost first: refuse unknown host names, cap request bodies, add the
-    # safety headers, then compress (JSON and the JS/CSS bundles: the map
-    # library alone is ~1 MB, which matters on phone data).
+    # Outermost first: refuse unknown host names, add the safety headers (also to
+    # refusals), check the admin token for changes, cap request bodies, then
+    # compress (JSON and the JS/CSS bundles: the map library alone is ~1 MB,
+    # which matters on phone data).
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
-    app.add_middleware(SecurityHeaders)
     app.add_middleware(BodyLimit, max_bytes=64 * 1024)
-    if settings.allowed_hosts:
-        # The health check inside the container asks for 127.0.0.1.
-        app.add_middleware(TrustedHostMiddleware,
-                           allowed_hosts=[*settings.allowed_hosts, "localhost", "127.0.0.1"])
+    if settings.admin_token:
+        app.add_middleware(AdminToken, token=settings.admin_token)
+    app.add_middleware(SecurityHeaders)
+    # The health check inside the container asks for 127.0.0.1, which is always allowed.
+    app.add_middleware(HostCheck, allowed=settings.allowed_hosts)
 
     # ---- health and the systems list --------------------------------------------------
     @app.get("/healthz", include_in_schema=False)
@@ -172,10 +173,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ---- API docs, served from this server (no outside script) ------------------------
     @app.get("/api/docs", include_in_schema=False)
     def docs():
-        return get_swagger_ui_html(openapi_url=app.openapi_url or "/openapi.json", title="Next Stop API",
+        page = get_swagger_ui_html(openapi_url=app.openapi_url or "/openapi.json", title="Next Stop API",
                                    swagger_js_url="/vendor/swagger/swagger-ui-bundle.js",
                                    swagger_css_url="/vendor/swagger/swagger-ui.css",
                                    swagger_favicon_url="/favicon.svg")
+        page.headers["Content-Security-Policy"] = docs_security_policy(bytes(page.body).decode())
+        return page
 
     # ---- web app ------------------------------------------------------------------------
     page = IndexPage(WEB_DIR)

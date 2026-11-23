@@ -191,11 +191,13 @@ GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/next-st
 
 The app has no login: anyone who can reach the port can read your home and work stations and change them. Keep it on your home network or a private network (above). Beyond that:
 
-- **`ALLOWED_HOSTS`**: list the names you open the app by (e.g. `192.168.1.20,nextstop.lan`). Requests for any other name are refused, which stops a web page you visit from reaching the app through a trick called DNS rebinding. Empty (the default) accepts any name.
+- **`ALLOWED_HOSTS`**: the names you open the app by. Requests for any other name are refused, which stops a web page you visit from reaching the app through a trick called DNS rebinding. If it's empty (the default), the app answers to IP addresses (e.g. `http://192.168.1.20:8080`), `localhost` and Tailscale names (`*.ts.net`) only. **If you open the app by another name** (e.g. `nextstop.lan`), list it, together with any address you use: `ALLOWED_HOSTS=192.168.1.20,nextstop.lan`. A leading `*.` matches any subdomain (`*.home.arpa`), and `*` accepts any name (not recommended: it turns the protection off).
+- **`ADMIN_TOKEN`** (optional): set it, and changing settings (home, work, switch time) needs it. The app asks for it once on each device and remembers it there. Reading boards and maps never needs it. Supports `ADMIN_TOKEN_FILE` for Docker secrets.
 - **Not root:** the app runs as user `99`, group `100` (Unraid's `nobody:users`), set with `PUID`/`PGID`. On the first start after updating, files in appdata that older versions wrote as root are handed over to that user.
-- **Keys** are never written to the log (shown masked in the settings summary).
-- **The page** is only allowed to run this server's own scripts, and the schedule cache can only hold schedule data.
-- Settings changes are limited to 64 KB and checked before anything is saved.
+- **Keys** are never written to the log (the settings summary only says whether each is set, and its length).
+- **The page** is only allowed to run this server's own scripts, can't be shown inside another site (no framing), and links from alerts are only followed if they're ordinary web links. The schedule cache can only hold schedule data, and downloaded schedules are size-checked before they're opened.
+- Settings changes are limited to 64 KB and checked before anything is saved. At most two CSV exports run at once.
+- **The image** installs only package files whose hashes match `requirements-lock.txt`. CI checks those packages and the built image for known vulnerabilities before publishing.
 
 ### docker compose
 
@@ -260,7 +262,8 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `STATIC_FULL_REFRESH_DAYS` | `7` | Re-download the whole schedule this often even if Metra says it hasn't changed (0 turns it off). |
 | `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
 | `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
-| `ALLOWED_HOSTS` | *(empty)* | Host names the app answers to, comma-separated (see "Security"). Empty = any. |
+| `ALLOWED_HOSTS` | *(empty)* | Host names the app answers to, comma-separated (see "Security"). Empty = IP addresses, `localhost` and `*.ts.net` names only; `*` = any name. |
+| `ADMIN_TOKEN` | *(empty)* | If set, changing settings needs this token (see "Security"). Or `ADMIN_TOKEN_FILE`. |
 | `PUID` / `PGID` | `99` / `100` | User and group the app runs as inside the container (see "Security"). |
 | `EXPORT_MAX_ROWS` | `250000` | Most rows one CSV export returns (1,000–5,000,000). See "Exports". |
 | `MAP_DOWNLOAD` | `true` | Download the self-hosted map (see "The map"). `false` skips it. |
@@ -396,11 +399,17 @@ CTA data is used under CTA's Developer License Agreement: "Data provided by CTA.
 ## Development
 
 ```sh
-pip install -r requirements-dev.txt
-CONFIG_DIR=./config uvicorn app.main:app --reload --port 8080
+pip install --require-hashes -r requirements-lock.txt && pip install -r requirements-dev.txt
+CONFIG_DIR=./config ALLOWED_HOSTS=localhost uvicorn app.main:app --reload --port 8080
 ruff check . && mypy            # lint and type checks (CI runs them too)
 pytest                          # unit tests (synthetic GTFS + GTFS-RT)
 METRA_LIVE_TESTS=1 pytest       # also parse Metra's real static feed
+```
+
+`requirements-lock.txt` pins every package (direct and indirect) with its file hashes. After changing `requirements.txt`, regenerate it with [pip-tools](https://pip-tools.readthedocs.io/):
+
+```sh
+pip-compile --generate-hashes --allow-unsafe --strip-extras --no-emit-index-url --output-file=requirements-lock.txt requirements.txt
 ```
 
 **Branches and builds:** work happens on `feature/…` branches, which don't run GitHub Actions; run the tests locally before pushing. Merging into `main` runs the tests once and publishes the Docker image the server pulls. Pull requests run the tests only, and docs-only changes don't run anything.
