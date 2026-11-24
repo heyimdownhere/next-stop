@@ -350,12 +350,26 @@
     if (li) { e.preventDefault(); pickBoardTrain(li); }
   });
 
+  // The "Going to" station the map's trains are filtered to, or null. Only trains
+  // from your station toward it are shown, unless you chose all trains, or picked a
+  // line (Map tab chips) that doesn't run between the two: then that line's trains
+  // are all shown, rather than an empty line.
+  function onTrip(routeId) {
+    const dest = state.dest && state.stationById.get(state.dest);
+    const from = state.station && state.stationById.get(state.station);
+    return !!dest && (dest.routes || []).includes(routeId) && (!from || (from.routes || []).includes(routeId));
+  }
+  function mapTripDest(focus = mapView.lineFocus) {
+    const dest = view.mapTrains !== "all" && state.dest && state.stationById.get(state.dest);
+    return dest && (!focus || onTrip(focus)) ? dest : null;
+  }
+
   async function refreshTrains() {
     if (CTA.active()) return CTA.refreshTrains();
     if (mapHidden()) return;  // timetable only: no train positions needed
     let data;
-    // Only trains still heading to your "Going to" stop, unless you chose all trains.
-    const dest = view.mapTrains !== "all" && state.dest && state.stationById.get(state.dest);
+    const dest = mapTripDest();
+    updateClear();
     const from = dest && state.station ? `&from=${encodeURIComponent(state.station)}` : "";
     try { data = await api(dest ? `/api/trains?to=${encodeURIComponent(state.dest)}${from}` : "/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
@@ -368,7 +382,10 @@
     const n = focus ? data.trains.filter((t) => t.route_id === focus).length : data.trains.length;
     const focusName = focus ? `${(mapRoutes().find((r) => r.id === focus) || {}).short_name || focus} ` : "";
     const note = $("map-note");
-    note.textContent = `${n} ${focusName}train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
+    const going = state.dest && state.stationById.get(state.dest);
+    const offTrip = focus && !dest && going && view.mapTrains !== "all"
+      ? ` · not on your trip, so all shown` : "";
+    note.textContent = `${n} ${focusName}train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""}${offTrip} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
     note.hidden = false;
   }
 
@@ -553,7 +570,9 @@
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
     if (dest) chip.innerHTML = `Trains to <b>${esc(dest.name)}</b> <span>· Show all ✕</span>`;
-    if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
+    // Hidden while a line that isn't on the trip is picked: the map shows all its trains then.
+    const filtering = dest && (view.mapTrains === "all" || mapTripDest());
+    if (state.tab === "map" && filtering) { if (chip.hidden) enter(chip); } else chip.hidden = true;
   }
   $("clear-btn").addEventListener("click", clearView);
   $("map-clear").addEventListener("click", clearView);
@@ -2037,7 +2056,7 @@
   });
   CTA.init({
     api, esc, chip, enter, toast, putJson, fmtTime, fmtDateTime, bigTime, untilText, serverNow, lineView, lineViewToggle, runningRow,
-    boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", openCommute: () => openCommute(),
+    boardCount: () => boardCount(), mapTrainsAll: () => view.mapTrains === "all", updateClear: () => updateClear(), openCommute: () => openCommute(),
     hidePickers: () => $("hide-pickers-btn").click(),
     setupCardHtml: (hasHome) => setupCardHtml("cta", hasHome), mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,

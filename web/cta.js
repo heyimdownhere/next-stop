@@ -124,8 +124,11 @@
     st.trains = d;
     const focus = host.mapView.lineFocus;
     // "Trains on the map" in Settings, as on Metra: with a Going to station, only the
-    // trains on their way from From to it (the ones on the board), unless "All trains".
-    const runs = st.board && st.dest && !host.mapTrainsAll()
+    // trains on their way from From to it (the ones on the board), unless "All trains",
+    // or a line is picked that doesn't run between the two: then all its trains show.
+    const tripLines = st.board && st.dest ? new Set(st.board.groups.map((g) => g.route_id)) : null;
+    const offTrip = !!(focus && tripLines && !host.mapTrainsAll() && !tripLines.has(focus));
+    const runs = st.board && st.dest && !host.mapTrainsAll() && !offTrip
       ? new Set(st.board.groups.flatMap((g) => g.trains.map((x) => String(x.run)))) : null;
     const list = d.trains.filter((t) => !runs || runs.has(String(t.run))).map((t) => ({
       ...t, system: "cta", id: tripId(t.run), trip_id: tripId(t.run), train: t.run,
@@ -135,7 +138,9 @@
     const n = focus ? list.filter((t) => t.route_id === focus).length : list.length;
     const note = $("map-note");
     note.textContent = d.source === "live"
-      ? `${n} ${focus ? `${lineOf(focus).short_name} ` : ""}train${n === 1 ? "" : "s"} · live positions${d.as_of ? ` · ${host.fmtDateTime(d.as_of)}` : ""}`
+      ? `${n} ${focus ? `${lineOf(focus).short_name} ` : ""}train${n === 1 ? "" : "s"}`
+        + (offTrip ? ` · not on your trip, so all shown` : "")
+        + ` · live positions${d.as_of ? ` · ${host.fmtDateTime(d.as_of)}` : ""}`
       : "No live CTA trains (add CTA_TRAIN_TRACKER_KEY on the server)";
     note.hidden = false;
     $("map-data").textContent = "Data provided by CTA. Not affiliated with or endorsed by CTA.";
