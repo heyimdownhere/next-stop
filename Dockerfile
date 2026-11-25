@@ -11,8 +11,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PGID=100 \
     TZ=America/Chicago
 
-# Debian's security fixes released since the base image was built.
-RUN apt-get update \
+# Debian's security fixes released since the base image was built. CI passes a
+# new SECURITY_UPDATES value on every run, so this step is never reused from
+# its build cache (a cached copy misses fixes released since it was made).
+ARG SECURITY_UPDATES=none
+RUN echo "security updates: $SECURITY_UPDATES" \
+ && apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
