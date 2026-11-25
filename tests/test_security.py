@@ -71,6 +71,19 @@ def test_every_response_has_the_safety_headers(tmp_path):
     assert "script-src 'self' 'sha256-" in docs and "frame-ancestors 'none'" in docs
 
 
+def test_the_map_worker_may_fetch_tiles(tmp_path):
+    # A worker runs under its own script's policy: with "default-src 'none'"
+    # MapLibre's worker could fetch no tiles and the map had no background.
+    c = TestClient(_app(tmp_path, allowed_hosts=("*",)))
+    for gz in ("gzip", "identity"):
+        r = c.get("/vendor/maplibre/maplibre-gl-worker.mjs", headers={"Accept-Encoding": gz})
+        assert r.status_code == 200
+        csp = r.headers["content-security-policy"]
+        assert "connect-src 'self' https://tiles.openfreemap.org" in csp and "frame-ancestors 'none'" in csp
+    assert "connect-src 'self'" in c.get("/app.js").headers["content-security-policy"]
+    assert c.get("/style.css").headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+
+
 def test_static_text_files_are_sent_compressed_from_one_copy(tmp_path):
     app = _app(tmp_path, allowed_hosts=("*",))
     c = TestClient(app)

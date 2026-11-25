@@ -58,6 +58,19 @@ def _script_hashes(page: str) -> str:
 # nothing may load, and no site may show it in a frame.
 DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
 
+# Sent with the app's own scripts. A script started as a worker (MapLibre's
+# tile worker) runs under the policy of its own response, not the page's, so
+# with DEFAULT_CSP it could fetch nothing and the map stayed blank. This lets a
+# worker do what the page lets the map do, and nothing more.
+SCRIPT_CSP = "; ".join([
+    "default-src 'none'",
+    "script-src 'self'",
+    f"connect-src 'self' {ONLINE_MAP_HOSTS}",
+    f"img-src 'self' data: blob: {ONLINE_MAP_HOSTS}",
+    "frame-ancestors 'none'",
+])
+SCRIPT_FILES = (".js", ".mjs")
+
 
 def docs_security_policy(page: str) -> str:
     """For /api/docs: Swagger UI's own files plus its one inline script."""
@@ -165,11 +178,13 @@ class WebFiles(StaticFiles):
         if response.status_code in (200, 304):
             versioned = bool(stamped) or b"v=" in scope.get("query_string", b"")
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if versioned else "no-cache"
+            if path.endswith(SCRIPT_FILES):
+                response.headers["Content-Security-Policy"] = SCRIPT_CSP
         if (response.status_code == 200 and isinstance(response, FileResponse)
                 and str(response.path).endswith(COMPRESSIBLE)
                 and b"gzip" in dict(scope["headers"]).get(b"accept-encoding", b"")):
             headers = {k: v for k, v in response.headers.items()
-                       if k.lower() in ("cache-control", "etag", "last-modified")}
+                       if k.lower() in ("cache-control", "etag", "last-modified", "content-security-policy")}
             body = self._compressed(str(response.path))
             # Already compressed: GZipMiddleware leaves it alone.
             return Response(body, media_type=response.media_type, headers={
