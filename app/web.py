@@ -41,6 +41,9 @@ VENDOR_PATH = re.compile(r"vendor/(?P<lib>[A-Za-z0-9_-]+)@[0-9a-f]{1,40}/(?P<res
 def vendor_stamp(lib_dir: Path) -> str:
     """Changes whenever any file in a vendor library's folder does."""
     h = hashlib.sha1()
+    # Browsers keep a vendor file's headers for a year along with it, so a new
+    # policy for scripts needs new addresses too.
+    h.update(SCRIPT_CSP.encode())
     for f in sorted(lib_dir.iterdir()):
         if f.is_file():
             st = f.stat()
