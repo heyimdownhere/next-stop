@@ -1,6 +1,6 @@
 # Direct dependencies. After changing this file, regenerate requirements-lock.txt
 # (pinned with hashes) as shown in README "Development".
-fastapi==0.163.1
+fastapi==0.165.0
 uvicorn==0.54.0
 httpx2==2.16.2
 gtfs-realtime-bindings==3.0.0
